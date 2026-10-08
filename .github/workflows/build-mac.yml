@@ -2,6 +2,7 @@ name: Build macOS
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -10,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: build-mac-${{ github.ref }}
+  group: build-mac-release
   cancel-in-progress: true
 
 jobs:
