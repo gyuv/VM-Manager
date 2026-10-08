@@ -25,13 +25,31 @@ WinRemoteOps updates itself from this repo's GitHub Releases. It doesn't use Squ
 To ship an update, bump `version` in `package.json` and let the **Build macOS** workflow run. It publishes `v<version>` with the DMGs, ZIPs and `latest-mac.yml`.
 
 ## Preparing the Windows servers
-Run in an elevated PowerShell on each server (lab / trusted network — HTTP + Basic auth):
+WinRemoteOps talks WS-Management directly over **HTTPS (5986, recommended)** or **HTTP (5985)** with Basic auth. It connects to a forwarded port such as `IP:14071` too, as long as that port forwards to WinRM and not to Remote Desktop (3389).
+
+**HTTPS (use this for anything reachable from the internet).** Run in an elevated PowerShell:
+```powershell
+winrm quickconfig -q
+$c = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation Cert:\LocalMachine\My
+New-Item WSMan:\localhost\Listener -Transport HTTPS -Address * -CertificateThumbPrint $c.Thumbprint -Force
+Set-Item WSMan:\localhost\Service\Auth\Basic $true
+New-NetFirewallRule -DisplayName "WinRM HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow
+```
+In the app, choose **HTTPS** and tick **Trust self-signed certificate**. The certificate is pinned the first time you connect; if it ever changes, the app refuses to connect.
+
+**HTTP (LAN or VPN only):**
 ```powershell
 winrm quickconfig -q
 Set-Item WSMan:\localhost\Service\Auth\Basic $true
 Set-Item WSMan:\localhost\Service\AllowUnencrypted $true
 ```
-Use a local administrator account. `nodejs-winrm` speaks HTTP only, so use this on a trusted LAN or through a VPN/SSH tunnel.
+
+Use a **local** administrator account (Basic auth doesn't accept domain accounts).
+
+**Test connection** in the server form checks, in order: the TCP port, whether a WinRM listener answers, whether Basic auth is offered, the TLS certificate, and the sign-in itself. It says which step failed. A dot on a server card means:
+- green: WinRM is working
+- amber: the port is open but WinRM fails
+- red: the port is unreachable
 
 ## Development
 ```bash

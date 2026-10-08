@@ -1,34 +1,70 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Trash2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, Lock, PlugZap, ShieldCheck, Trash2, Unlock, X, XCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { call } from '../api';
-import type { Server, ServerInput } from '../types';
+import type { ConnectionTest, Server, ServerInput } from '../types';
 
-const empty: ServerInput = { name: '', host: '', port: 5985, username: 'Administrator', password: '' };
+const empty: ServerInput = { name: '', host: '', port: 5986, username: 'Administrator', password: '', https: true, allowSelfSigned: true };
+
+const isPublicIp = (h: string) => {
+  const m = h.trim().match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return !(a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127));
+};
 
 export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean; editing?: Server; onClose: () => void; onSaved: (deletedId?: string) => void }) {
   const [form, setForm] = useState<ServerInput>(empty);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<ConnectionTest | null>(null);
 
   useEffect(() => {
     setError('');
-    setForm(editing ? { ...editing, password: '' } : empty);
+    setTest(null);
+    setForm(editing ? { ...editing, password: '', fingerprint: editing.fingerprint } : empty);
   }, [editing, open]);
 
-  const set = <K extends keyof ServerInput>(k: K, v: ServerInput[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const set = <K extends keyof ServerInput>(k: K, v: ServerInput[K]) => {
+    setTest(null);
+    setForm((f) => ({ ...f, [k]: v }));
+  };
 
   // Pasting "1.2.3.4:5986" moves the port into the port box.
   const splitHost = () => {
-    const m = form.host.trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '').match(/^([^:\[\]]+):(\d{1,5})$/);
+    const m = form.host.trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '').match(/^([^:[\]]+):(\d{1,5})$/);
     if (m) setForm((f) => ({ ...f, host: m[1], port: Number(m[2]) }));
+  };
+
+  // Switching scheme moves the port between the defaults, but leaves custom ports alone.
+  const setScheme = (https: boolean) =>
+    setForm((f) => ({
+      ...f,
+      https,
+      port: f.port === (https ? 5985 : 5986) ? (https ? 5986 : 5985) : f.port,
+      fingerprint: https ? f.fingerprint : '',
+    }));
+
+  const runTest = async () => {
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await call(window.api.testConnection(form)));
+    } catch (err) {
+      setTest({ ok: false, steps: [{ id: 'err', ok: false, detail: (err as Error).message }] });
+    } finally {
+      setTesting(false);
+    }
   };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     try {
-      await call(window.api.saveServer(form));
+      // Pin the certificate the user just verified with "Test connection".
+      const fingerprint = form.https ? form.fingerprint || (test?.ok ? test.fingerprint : undefined) : '';
+      await call(window.api.saveServer({ ...form, fingerprint }));
       onSaved();
       onClose();
     } catch (err) {
@@ -45,6 +81,8 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
     onClose();
   };
 
+  const httpPublic = !form.https && isPublicIp(form.host);
+
   return (
     <AnimatePresence>
       {open && (
@@ -56,7 +94,7 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
             animate={{ scale: 1, y: 0, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 260, damping: 24 }}
-            className="glass w-[440px] bg-slate-900/80 p-6"
+            className="glass max-h-[90vh] w-[480px] overflow-y-auto bg-slate-900/80 p-6"
           >
             <div className="mb-5 flex items-center justify-between">
               <h2 className="text-lg font-semibold">{editing ? 'Edit server' : 'Add Windows server'}</h2>
@@ -64,15 +102,80 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
             </div>
             <div className="space-y-3">
               <Field label="Display name"><input className="input" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="SQL-PROD-01" /></Field>
-              <div className="grid grid-cols-[1fr_100px] gap-3">
-                <Field label="Host / IP"><input className="input" required value={form.host} onChange={(e) => set('host', e.target.value)} onBlur={splitHost} placeholder="10.0.0.12" /></Field>
-                <Field label="WinRM port"><input className="input" type="number" value={form.port} onChange={(e) => set('port', Number(e.target.value))} /></Field>
+
+              <Field label="Connection">
+                <div className="grid grid-cols-2 gap-1 rounded-lg bg-black/30 p-1">
+                  {[true, false].map((h) => (
+                    <button key={String(h)} type="button" onClick={() => setScheme(h)}
+                      className={`relative flex items-center justify-center gap-1.5 rounded-md py-1.5 text-sm ${form.https === h ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}>
+                      {form.https === h && <motion.span layoutId="scheme" className="absolute inset-0 rounded-md bg-white/10" />}
+                      <span className="relative flex items-center gap-1.5">{h ? <Lock size={13} /> : <Unlock size={13} />}{h ? 'HTTPS · encrypted' : 'HTTP'}</span>
+                    </button>
+                  ))}
+                </div>
+              </Field>
+
+              <div className="grid grid-cols-[1fr_110px] gap-3">
+                <Field label="Host / IP"><input className="input" required value={form.host} onChange={(e) => set('host', e.target.value)} onBlur={splitHost} placeholder="160.187.251.46" /></Field>
+                <Field label="Port"><input className="input" type="number" min={1} max={65535} value={form.port} onChange={(e) => set('port', Number(e.target.value))} /></Field>
               </div>
+              <p className="-mt-1 text-[11px] text-slate-500">Use the port your provider forwards to WinRM ({form.https ? '5986' : '5985'} on the server). A Remote Desktop port will not work.</p>
+
+              <AnimatePresence>
+                {form.https && (
+                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                    <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-white/10 bg-black/20 p-3">
+                      <input type="checkbox" className="mt-0.5 accent-sky-500" checked={form.allowSelfSigned} onChange={(e) => set('allowSelfSigned', e.target.checked)} />
+                      <span>
+                        <span className="block text-sm">Trust self-signed certificate</span>
+                        <span className="block text-[11px] text-slate-500">The certificate is pinned on first connect; any later change is blocked as possible interception.</span>
+                      </span>
+                    </label>
+                    {form.fingerprint && (
+                      <div className="mt-2 flex items-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-300">
+                        <ShieldCheck size={13} className="shrink-0" />
+                        <span className="flex-1 truncate font-mono" title={form.fingerprint}>Pinned {form.fingerprint}</span>
+                        <button type="button" onClick={() => set('fingerprint', '')} className="text-slate-400 hover:text-white">Clear</button>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {httpPublic && (
+                <div className="flex gap-2 rounded-lg border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+                  <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                  <span>This is a public IP. Over HTTP the admin password is sent effectively in clear text every few seconds. Use HTTPS (5986) or a VPN.</span>
+                </div>
+              )}
+
               <Field label="Username"><input className="input" required value={form.username} onChange={(e) => set('username', e.target.value)} /></Field>
               <Field label={editing?.hasPassword ? 'Password (leave blank to keep)' : 'Password'}>
                 <input className="input" type="password" required={!editing?.hasPassword} value={form.password} onChange={(e) => set('password', e.target.value)} />
               </Field>
-              <p className="text-[11px] leading-relaxed text-slate-500">Credentials are encrypted with your macOS Keychain before being saved locally. Requires WinRM over HTTP (5985) with Basic auth on the target.</p>
+
+              <button type="button" onClick={runTest} disabled={testing || !form.host || !form.username}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-sky-400/30 bg-sky-500/10 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/20 disabled:opacity-50">
+                {testing ? <Loader2 size={15} className="animate-spin" /> : <PlugZap size={15} />}
+                {testing ? 'Testing…' : 'Test connection'}
+              </button>
+              <AnimatePresence>
+                {test && (
+                  <motion.ul initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="space-y-1.5 rounded-lg bg-black/30 p-3 text-xs">
+                    {test.steps.map((st, i) => (
+                      <motion.li key={st.id} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.08 }} className="flex gap-2">
+                        {st.ok ? <CheckCircle2 size={14} className="mt-px shrink-0 text-emerald-400" /> : <XCircle size={14} className="mt-px shrink-0 text-rose-400" />}
+                        <span className={st.ok ? 'text-slate-300' : 'text-rose-200'}>{st.detail}</span>
+                      </motion.li>
+                    ))}
+                    {test.ok && form.https && !form.fingerprint && test.fingerprint && (
+                      <li className="pt-1 text-[11px] text-slate-500">This certificate will be pinned when you save.</li>
+                    )}
+                  </motion.ul>
+                )}
+              </AnimatePresence>
+
+              <p className="text-[11px] leading-relaxed text-slate-500">Credentials are encrypted with your macOS Keychain before being saved locally.</p>
               {error && <p className="text-sm text-rose-400">{error}</p>}
             </div>
             <div className="mt-6 flex items-center justify-between">
@@ -92,9 +195,9 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="block">
+    <div className="block">
       <span className="mb-1 block text-xs text-slate-400">{label}</span>
       {children}
-    </label>
+    </div>
   );
 }

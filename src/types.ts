@@ -5,6 +5,11 @@ export interface Server {
   port: number;
   username: string;
   hasPassword: boolean;
+  https: boolean;
+  allowSelfSigned: boolean;
+  fingerprint: string;
+  /** Plain HTTP to an internet-routable IP: the password crosses the internet base64-encoded. */
+  publicHttp: boolean;
 }
 
 export interface ServerInput {
@@ -14,6 +19,22 @@ export interface ServerInput {
   port: number;
   username: string;
   password: string;
+  https: boolean;
+  allowSelfSigned: boolean;
+  fingerprint?: string;
+}
+
+export interface ConnectionStep {
+  id: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface ConnectionTest {
+  ok: boolean;
+  steps: ConnectionStep[];
+  fingerprint?: string;
+  info?: { host: string; os: string; build: string; ps: string };
 }
 
 export interface Telemetry {
@@ -101,6 +122,7 @@ export interface WinRemoteOpsApi {
   listServers(): Promise<IpcResult<Server[]>>;
   saveServer(s: ServerInput): Promise<IpcResult<Server>>;
   deleteServer(id: string): Promise<IpcResult<boolean>>;
+  testConnection(s: ServerInput): Promise<IpcResult<ConnectionTest>>;
   ping(id: string): Promise<IpcResult<PingResult>>;
   telemetry(id: string): Promise<IpcResult<Telemetry>>;
   processes(id: string): Promise<IpcResult<ProcessInfo[]>>;
