@@ -23,6 +23,22 @@ function decrypt(stored) {
   return Buffer.from(data, 'base64').toString('utf8');
 }
 
+// Accepts "host", "host:port", "[ipv6]:port", or a URL like http://host:port/wsman.
+function splitHostPort(rawHost, rawPort) {
+  let host = String(rawHost || '').trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '');
+  let port = Number(rawPort) || 5985;
+  let m;
+  if ((m = host.match(/^\[([^\]]+)\](?::(\d+))?$/))) {
+    host = m[1];
+    if (m[2]) port = Number(m[2]);
+  } else if ((m = host.match(/^([^:]+):(\d+)$/))) {
+    host = m[1];
+    port = Number(m[2]);
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port');
+  return { host, port };
+}
+
 const getRaw = () => store.get('servers');
 const publicView = (s) => ({ id: s.id, name: s.name, host: s.host, port: s.port, username: s.username, hasPassword: !!s.password });
 
@@ -42,18 +58,30 @@ function handle(channel, fn) {
   });
 }
 
+// Repair servers saved before host:port splitting existed.
+store.set(
+  'servers',
+  store.get('servers').map((s) => {
+    try {
+      return { ...s, ...splitHostPort(s.host, s.port) };
+    } catch {
+      return s;
+    }
+  }),
+);
+
 handle('servers:list', () => getRaw().map(publicView));
 
 handle('servers:save', (_e, input) => {
-  const host = String(input.host || '').trim();
-  if (!host || !/^[A-Za-z0-9.\-:\[\]]+$/.test(host)) throw new Error('Invalid host / IP');
+  const { host, port } = splitHostPort(input.host, input.port);
+  if (!host || !/^[A-Za-z0-9.\-:]+$/.test(host)) throw new Error('Invalid host / IP');
   const servers = getRaw();
   const existing = servers.find((s) => s.id === input.id);
   const record = {
     id: existing ? existing.id : crypto.randomUUID(),
     name: String(input.name || host).trim(),
     host,
-    port: Number(input.port) || 5985,
+    port,
     username: String(input.username || '').trim(),
     // Blank password on edit keeps the stored one.
     password: input.password ? encrypt(input.password) : existing ? existing.password : '',
