@@ -52,6 +52,7 @@ async function runPowerShell(server, script, timeoutMs = DEFAULT_TIMEOUT_MS) {
 
 function describeError(err) {
   const msg = err && err.message ? err.message : String(err);
+  if (/ENOTFOUND|EAI_AGAIN/.test(msg)) return 'Host name could not be resolved — check the Host field (put the port in the port box).';
   if (/ECONNREFUSED/.test(msg)) return 'Connection refused — is WinRM enabled (winrm quickconfig)?';
   if (/ETIMEDOUT|EHOSTUNREACH|timed out/.test(msg)) return 'Host unreachable or timed out';
   if (/401|Unauthorized|AccessDenied|status Code/i.test(msg)) return 'WinRM rejected the request — check credentials, Basic auth and AllowUnencrypted';

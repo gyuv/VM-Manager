@@ -18,6 +18,12 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
 
   const set = <K extends keyof ServerInput>(k: K, v: ServerInput[K]) => setForm((f) => ({ ...f, [k]: v }));
 
+  // Pasting "1.2.3.4:5986" moves the port into the port box.
+  const splitHost = () => {
+    const m = form.host.trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '').match(/^([^:\[\]]+):(\d{1,5})$/);
+    if (m) setForm((f) => ({ ...f, host: m[1], port: Number(m[2]) }));
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -59,7 +65,7 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
             <div className="space-y-3">
               <Field label="Display name"><input className="input" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="SQL-PROD-01" /></Field>
               <div className="grid grid-cols-[1fr_100px] gap-3">
-                <Field label="Host / IP"><input className="input" required value={form.host} onChange={(e) => set('host', e.target.value)} placeholder="10.0.0.12" /></Field>
+                <Field label="Host / IP"><input className="input" required value={form.host} onChange={(e) => set('host', e.target.value)} onBlur={splitHost} placeholder="10.0.0.12" /></Field>
                 <Field label="WinRM port"><input className="input" type="number" value={form.port} onChange={(e) => set('port', Number(e.target.value))} /></Field>
               </div>
               <Field label="Username"><input className="input" required value={form.username} onChange={(e) => set('username', e.target.value)} /></Field>
