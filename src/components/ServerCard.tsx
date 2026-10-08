@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { AlertTriangle, Cpu, HardDrive, Lock, MemoryStick, Wifi } from 'lucide-react';
+import { AlertTriangle, Cpu, HardDrive, Lock, MemoryStick, Network, Wifi } from 'lucide-react';
 import { diskPct, loadColor, ramPct } from '../api';
 import type { ServerState } from '../hooks/useFleet';
 import type { Server } from '../types';
@@ -36,9 +36,12 @@ export function ServerCard({ server, st, selected, onSelect }: { server: Server;
         </div>
         <span className="flex items-center gap-1 text-xs text-slate-400 tabular-nums">
           <Wifi size={12} />
-          {online ? (st?.error ? 'port open · WinRM failing' : `${st?.ping?.latencyMs} ms`) : online === false ? 'offline' : '…'}
+          {online ? (st?.error ? (server.via ? 'jump ok · target failing' : 'port open · WinRM failing') : `${st?.ping?.latencyMs} ms`) : online === false ? 'offline' : '…'}
         </span>
       </div>
+      {server.via && (
+        <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] text-violet-200"><Network size={10} />via {server.viaName}</div>
+      )}
       <div className="mt-0.5 truncate text-xs text-slate-500">{server.host}:{server.port}{t ? ` · ${t.os?.replace('Microsoft ', '')}` : ''}</div>
 
       <div className="mt-3 -mx-1">

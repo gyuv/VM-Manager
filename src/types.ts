@@ -10,6 +10,9 @@ export interface Server {
   fingerprint: string;
   /** Plain HTTP to an internet-routable IP: the password crosses the internet base64-encoded. */
   publicHttp: boolean;
+  /** Id of the jump host this server is reached through ('' = direct). */
+  via: string;
+  viaName: string;
 }
 
 export interface ServerInput {
@@ -22,6 +25,7 @@ export interface ServerInput {
   https: boolean;
   allowSelfSigned: boolean;
   fingerprint?: string;
+  via?: string;
 }
 
 export interface ConnectionStep {

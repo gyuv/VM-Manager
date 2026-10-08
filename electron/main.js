@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { app, BrowserWindow, Menu, ipcMain, safeStorage, shell } = require('electron');
 const Store = require('electron-store');
-const { runPowerShell: runRaw, parseJson, tcpPing, testConnection, SCRIPTS } = require('./remote');
+const { runPowerShell: runRaw, parseJson, tcpPing, testConnection, testViaJump, wrapForJump, SCRIPTS } = require('./remote');
 const { Updater } = require('./updater');
 
 const store = new Store({ name: 'servers', defaults: { servers: [] } });
@@ -50,7 +50,9 @@ const publicView = (s) => ({
   https: !!s.https,
   allowSelfSigned: !!s.allowSelfSigned,
   fingerprint: s.fingerprint || '',
-  publicHttp: !s.https && isPublicAddress(s.host),
+  publicHttp: !s.via && !s.https && isPublicAddress(s.host),
+  via: s.via || '',
+  viaName: s.via ? (getRaw().find((x) => x.id === s.via) || {}).name || 'missing jump host' : '',
 });
 
 // True for internet-routable IPv4 literals (where plain-HTTP Basic auth leaks the password).
@@ -78,6 +80,25 @@ function getServer(id) {
   const s = getRaw().find((x) => x.id === id);
   if (!s) throw new Error('Unknown server');
   return { ...s, password: decrypt(s.password) };
+}
+
+// Runs a script on a server — directly, or through its jump host via Invoke-Command.
+function exec(id, script, timeoutMs) {
+  const server = getServer(id);
+  if (!server.via) return runPowerShell(server, script, timeoutMs);
+  const jump = getServer(server.via);
+  if (jump.via) throw new Error('Jump hosts cannot be chained');
+  return runPowerShell(jump, wrapForJump(server, script), timeoutMs);
+}
+
+function validateVia(via, selfId) {
+  if (!via) return '';
+  if (via === selfId) throw new Error('A server cannot be its own jump host');
+  const jump = getRaw().find((x) => x.id === via);
+  if (!jump) throw new Error('Jump host not found');
+  if (jump.via) throw new Error('The chosen jump host itself goes through a jump host');
+  if (selfId && getRaw().some((x) => x.via === selfId)) throw new Error('This server is a jump host for others, so it must connect directly');
+  return via;
 }
 
 function handle(channel, fn) {
@@ -110,8 +131,10 @@ handle('servers:save', (_e, input) => {
   if (!host || !/^[A-Za-z0-9.\-:]+$/.test(host)) throw new Error('Invalid host / IP');
   const servers = getRaw();
   const existing = servers.find((s) => s.id === input.id);
+  const via = validateVia(input.via, existing && existing.id);
   const record = {
     id: existing ? existing.id : crypto.randomUUID(),
+    via,
     name: String(input.name || host).trim(),
     host,
     port,
@@ -119,9 +142,9 @@ handle('servers:save', (_e, input) => {
     // Blank password on edit keeps the stored one.
     password: input.password ? encrypt(input.password) : existing ? existing.password : '',
     https: useHttps,
-    allowSelfSigned: useHttps && !!input.allowSelfSigned,
+    allowSelfSigned: useHttps && !via && !!input.allowSelfSigned,
     // Keep a pin only while the endpoint stays the same; input.fingerprint lets the form pin/clear explicitly.
-    fingerprint: !useHttps
+    fingerprint: !useHttps || via
       ? ''
       : typeof input.fingerprint === 'string'
         ? input.fingerprint
@@ -134,6 +157,8 @@ handle('servers:save', (_e, input) => {
 });
 
 handle('servers:delete', (_e, id) => {
+  const users = getRaw().filter((x) => x.via === id);
+  if (users.length) throw new Error(`Used as jump host by ${users.map((x) => x.name).join(', ')} — change those first`);
   store.set('servers', getRaw().filter((s) => s.id !== id));
   return true;
 });
@@ -141,7 +166,10 @@ handle('servers:delete', (_e, id) => {
 handle('server:ping', (_e, id) => {
   const s = getRaw().find((x) => x.id === id);
   if (!s) throw new Error('Unknown server');
-  return tcpPing(s.host, s.port);
+  // A server behind a jump host isn't reachable from the Mac; report the jump host's reachability.
+  const target = s.via ? getRaw().find((x) => x.id === s.via) : s;
+  if (!target) return { online: false, latencyMs: null };
+  return tcpPing(target.host, target.port);
 });
 
 // Test unsaved form values; a blank password on an existing server uses the stored one.
@@ -149,6 +177,11 @@ handle('server:test', (_e, input) => {
   const useHttps = !!input.https;
   const { host, port } = splitHostPort(input.host, input.port, useHttps);
   const existing = input.id ? getRaw().find((x) => x.id === input.id) : undefined;
+  const password = input.password || (existing ? decrypt(existing.password) : '');
+  if (input.via) {
+    validateVia(input.via, input.id);
+    return testViaJump(getServer(input.via), { host, port, https: useHttps, username: String(input.username || '').trim(), password });
+  }
   return testConnection({
     host,
     port,
@@ -156,32 +189,32 @@ handle('server:test', (_e, input) => {
     allowSelfSigned: useHttps && !!input.allowSelfSigned,
     fingerprint: typeof input.fingerprint === 'string' ? input.fingerprint : undefined,
     username: String(input.username || '').trim(),
-    password: input.password || (existing ? decrypt(existing.password) : ''),
+    password,
   });
 });
 
-handle('server:telemetry', async (_e, id) => parseJson(await runPowerShell(getServer(id), SCRIPTS.telemetry)));
+handle('server:telemetry', async (_e, id) => parseJson(await exec(id, SCRIPTS.telemetry)));
 
 handle('server:processes', async (_e, id) => {
-  const data = parseJson(await runPowerShell(getServer(id), SCRIPTS.processes));
+  const data = parseJson(await exec(id, SCRIPTS.processes));
   return Array.isArray(data) ? data : [data];
 });
 
 handle('server:kill', async (_e, id, pid) => {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 4) throw new Error('Invalid or protected PID');
-  return runPowerShell(getServer(id), SCRIPTS.kill(n));
+  return exec(id, SCRIPTS.kill(n));
 });
 
 handle('action:smartBoost', async (e, id) => {
-  const server = getServer(id);
+  getServer(id);
   const results = [];
   const total = SCRIPTS.boostSteps.length;
   for (let i = 0; i < total; i++) {
     const step = SCRIPTS.boostSteps[i];
     e.sender.send('boost:progress', { serverId: id, step: i, total, id: step.id, label: step.label, status: 'running' });
     try {
-      const out = await runPowerShell(server, step.script, 120000);
+      const out = await exec(id, step.script, 120000);
       results.push({ id: step.id, ok: true, output: out.trim() });
       e.sender.send('boost:progress', { serverId: id, step: i, total, id: step.id, label: step.label, status: 'done' });
     } catch (err) {
@@ -192,11 +225,11 @@ handle('action:smartBoost', async (e, id) => {
   return results;
 });
 
-handle('action:networkReset', async (_e, id) => runPowerShell(getServer(id), SCRIPTS.networkReset, 60000));
-handle('action:diskCleanup', async (_e, id) => runPowerShell(getServer(id), SCRIPTS.diskCleanup, 600000));
+handle('action:networkReset', async (_e, id) => exec(id, SCRIPTS.networkReset, 60000));
+handle('action:diskCleanup', async (_e, id) => exec(id, SCRIPTS.diskCleanup, 600000));
 handle('action:power', async (_e, id, mode) => {
   if (mode !== 'reboot' && mode !== 'shutdown') throw new Error('Invalid power action');
-  return runPowerShell(getServer(id), SCRIPTS[mode]);
+  return exec(id, SCRIPTS[mode]);
 });
 
 handle('app:info', () => ({ version: app.getVersion(), platform: process.platform, arch: process.arch, packaged: app.isPackaged }));

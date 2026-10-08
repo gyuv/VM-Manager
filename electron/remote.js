@@ -64,6 +64,67 @@ function describeError(err) {
   return msg;
 }
 
+const psQuote = (v) => `'${String(v).replace(/'/g, "''")}'`;
+
+/**
+ * Wraps a script so it runs on `target` *through* a jump host: the jump host
+ * executes Invoke-Command against the target's private address. Only the jump
+ * host needs a WinRM port reachable from the Mac.
+ */
+function wrapForJump(target, script) {
+  const port = Number(target.port) || (target.https ? 5986 : 5985);
+  const inner = Buffer.from(`$ProgressPreference='SilentlyContinue';${script}`, 'utf8').toString('base64');
+  return `$t=${psQuote(target.host)}
+${
+  target.https
+    ? ''
+    : // Workgroup machines only accept NTLM over HTTP to hosts listed in TrustedHosts; add just this target.
+      `$th=[string](Get-Item WSMan:\\localhost\\Client\\TrustedHosts).Value
+if($th -ne '*' -and (($th -split ',') | ForEach-Object { $_.Trim() }) -notcontains $t){ Set-Item WSMan:\\localhost\\Client\\TrustedHosts -Value ((@($th,$t) | Where-Object { $_ }) -join ',') -Force }`
+}
+$cred=New-Object System.Management.Automation.PSCredential(${psQuote(target.username)},(ConvertTo-SecureString ${psQuote(target.password)} -AsPlainText -Force))
+$sb=[scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${inner}')))
+$p=@{ComputerName=$t;Port=${port};Credential=$cred;ScriptBlock=$sb;ErrorAction='Stop'}
+${target.https ? "$p.UseSSL=$true;$p.SessionOption=New-PSSessionOption -SkipCACheck -SkipCNCheck -SkipRevocationCheck" : ''}
+try { Invoke-Command @p } catch { [Console]::Error.WriteLine("Jump host could not run the command on $($t): $($_.Exception.Message)"); exit 1 }`;
+}
+
+const INFO_SCRIPT = `$os=Get-CimInstance Win32_OperatingSystem; [pscustomobject]@{host=$env:COMPUTERNAME; os=$os.Caption; build=$os.BuildNumber; ps=$PSVersionTable.PSVersion.ToString()} | ConvertTo-Json -Compress`;
+
+/** Connection test for a server reached through a jump host. */
+async function testViaJump(jump, target) {
+  const steps = [];
+  const add = (id, ok, detail) => steps.push({ id, ok, detail });
+  const done = (extra = {}) => ({ ok: steps.every((x) => x.ok !== false), steps, ...extra });
+  try {
+    const j = parseJson(await runPowerShell(jump, INFO_SCRIPT, 30000));
+    add('jump', true, `Jump host ${j.host} reachable (${jump.host}:${jump.port})`);
+  } catch (err) {
+    add('jump', false, `Jump host failed: ${err.message}`);
+    return done();
+  }
+  const port = Number(target.port) || (target.https ? 5986 : 5985);
+  try {
+    const probe = await runPowerShell(jump, `(Test-NetConnection -ComputerName ${psQuote(target.host)} -Port ${port} -WarningAction SilentlyContinue).TcpTestSucceeded`, 30000);
+    if (!/True/i.test(probe)) {
+      add('tcp', false, `Jump host cannot reach ${target.host}:${port} — run Enable-PSRemoting -Force on the target and check its firewall`);
+      return done();
+    }
+    add('tcp', true, `Jump host reaches ${target.host}:${port}`);
+  } catch (err) {
+    add('tcp', false, err.message);
+    return done();
+  }
+  try {
+    const info = parseJson(await runPowerShell(jump, wrapForJump(target, INFO_SCRIPT), 60000));
+    add('auth', true, `Signed in via jump · ${info.host} · ${info.os} (build ${info.build}) · PowerShell ${info.ps}`);
+    return done({ info });
+  } catch (err) {
+    add('auth', false, err.message);
+    return done();
+  }
+}
+
 /** Step-by-step diagnosis used by the "Test connection" button. */
 async function testConnection(server) {
   const steps = [];
@@ -116,7 +177,7 @@ async function testConnection(server) {
   try {
     const out = await runPowerShell(
       { ...server, port },
-      `$os=Get-CimInstance Win32_OperatingSystem; [pscustomobject]@{host=$env:COMPUTERNAME; os=$os.Caption; build=$os.BuildNumber; ps=$PSVersionTable.PSVersion.ToString()} | ConvertTo-Json -Compress`,
+      INFO_SCRIPT,
       30000,
     );
     const info = parseJson(out);
@@ -202,4 +263,4 @@ $after=(Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'").FreeSpace
   kill: (pid) => `Stop-Process -Id ${pid} -Force -ErrorAction Stop; 'Process ${pid} terminated'`,
 };
 
-module.exports = { runPowerShell, parseJson, tcpPing, testConnection, SCRIPTS };
+module.exports = { runPowerShell, parseJson, tcpPing, testConnection, testViaJump, wrapForJump, encodePowerShell, SCRIPTS };

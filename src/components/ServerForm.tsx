@@ -1,10 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, CheckCircle2, Loader2, Lock, PlugZap, ShieldCheck, Trash2, Unlock, X, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Globe, Loader2, Lock, Network, PlugZap, ShieldCheck, Trash2, Unlock, X, XCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { call } from '../api';
 import type { ConnectionTest, Server, ServerInput } from '../types';
 
-const empty: ServerInput = { name: '', host: '', port: 5986, username: 'Administrator', password: '', https: true, allowSelfSigned: true };
+const empty: ServerInput = { name: '', host: '', port: 5986, username: 'Administrator', password: '', https: true, allowSelfSigned: true, via: '' };
 
 const isPublicIp = (h: string) => {
   const m = h.trim().match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
@@ -13,7 +13,7 @@ const isPublicIp = (h: string) => {
   return !(a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127));
 };
 
-export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean; editing?: Server; onClose: () => void; onSaved: (deletedId?: string) => void }) {
+export function ServerForm({ open, editing, servers, onClose, onSaved }: { open: boolean; editing?: Server; servers: Server[]; onClose: () => void; onSaved: (deletedId?: string) => void }) {
   const [form, setForm] = useState<ServerInput>(empty);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -63,7 +63,7 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
     setBusy(true);
     try {
       // Pin the certificate the user just verified with "Test connection".
-      const fingerprint = form.https ? form.fingerprint || (test?.ok ? test.fingerprint : undefined) : '';
+      const fingerprint = form.https && !viaJump ? form.fingerprint || (test?.ok ? test.fingerprint : undefined) : '';
       await call(window.api.saveServer({ ...form, fingerprint }));
       onSaved();
       onClose();
@@ -81,7 +81,19 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
     onClose();
   };
 
-  const httpPublic = !form.https && isPublicIp(form.host);
+  // Jump hosts must connect directly; a server that others jump through can't itself use one.
+  const jumpCandidates = servers.filter((x) => !x.via && x.id !== editing?.id);
+  const isJumpForOthers = !!editing && servers.some((x) => x.via === editing.id);
+  const viaJump = !!form.via;
+  const setRoute = (via: string) =>
+    setForm((f) => ({
+      ...f,
+      via,
+      // Inside the private network WinRM normally listens on plain HTTP 5985.
+      ...(via && !f.via ? { https: false, port: 5985, allowSelfSigned: false, fingerprint: '' } : {}),
+      ...(!via && f.via ? { https: true, port: 5986, allowSelfSigned: true } : {}),
+    }));
+  const httpPublic = !viaJump && !form.https && isPublicIp(form.host);
 
   return (
     <AnimatePresence>
@@ -103,6 +115,36 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
             <div className="space-y-3">
               <Field label="Display name"><input className="input" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="SQL-PROD-01" /></Field>
 
+              <Field label="Route">
+                <div className="grid grid-cols-2 gap-1 rounded-lg bg-black/30 p-1">
+                  {[false, true].map((j) => (
+                    <button key={String(j)} type="button" disabled={j && (isJumpForOthers || jumpCandidates.length === 0)}
+                      onClick={() => setRoute(j ? form.via || jumpCandidates[0]?.id || '' : '')}
+                      className={`relative flex items-center justify-center gap-1.5 rounded-md py-1.5 text-sm disabled:opacity-40 ${viaJump === j ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}>
+                      {viaJump === j && <motion.span layoutId="route" className="absolute inset-0 rounded-md bg-white/10" />}
+                      <span className="relative flex items-center gap-1.5">{j ? <Network size={13} /> : <Globe size={13} />}{j ? 'Via jump host' : 'Direct'}</span>
+                    </button>
+                  ))}
+                </div>
+                {isJumpForOthers && <p className="mt-1 text-[11px] text-slate-500">Other servers go through this one, so it must connect directly.</p>}
+                {!isJumpForOthers && jumpCandidates.length === 0 && <p className="mt-1 text-[11px] text-slate-500">Add a directly reachable server first to use it as a jump host.</p>}
+              </Field>
+
+              <AnimatePresence>
+                {viaJump && (
+                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                    <Field label="Jump host">
+                      <select className="input" value={form.via} onChange={(e) => set('via', e.target.value)}>
+                        {jumpCandidates.map((j) => <option key={j.id} value={j.id}>{j.name} ({j.host}:{j.port})</option>)}
+                      </select>
+                    </Field>
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                      The jump host runs <span className="font-mono">Invoke-Command</span> against this server's <b>private</b> address — no public port needed. On this server run <span className="font-mono">Enable-PSRemoting -Force</span> once.
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <Field label="Connection">
                 <div className="grid grid-cols-2 gap-1 rounded-lg bg-black/30 p-1">
                   {[true, false].map((h) => (
@@ -116,13 +158,17 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
               </Field>
 
               <div className="grid grid-cols-[1fr_110px] gap-3">
-                <Field label="Host / IP"><input className="input" required value={form.host} onChange={(e) => set('host', e.target.value)} onBlur={splitHost} placeholder="160.187.251.46" /></Field>
+                <Field label={viaJump ? 'Private IP (as seen from jump host)' : 'Host / IP'}><input className="input" required value={form.host} onChange={(e) => set('host', e.target.value)} onBlur={splitHost} placeholder={viaJump ? '10.0.0.12' : '160.187.251.46'} /></Field>
                 <Field label="Port"><input className="input" type="number" min={1} max={65535} value={form.port} onChange={(e) => set('port', Number(e.target.value))} /></Field>
               </div>
-              <p className="-mt-1 text-[11px] text-slate-500">Use the port your provider forwards to WinRM ({form.https ? '5986' : '5985'} on the server). A Remote Desktop port will not work.</p>
+              <p className="-mt-1 text-[11px] text-slate-500">
+                {viaJump
+                  ? `WinRM port on the private network (normally ${form.https ? '5986' : '5985'}).`
+                  : `Use the port your provider forwards to WinRM (${form.https ? '5986' : '5985'} on the server). A Remote Desktop port will not work.`}
+              </p>
 
               <AnimatePresence>
-                {form.https && (
+                {form.https && !viaJump && (
                   <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
                     <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-white/10 bg-black/20 p-3">
                       <input type="checkbox" className="mt-0.5 accent-sky-500" checked={form.allowSelfSigned} onChange={(e) => set('allowSelfSigned', e.target.checked)} />
@@ -168,7 +214,7 @@ export function ServerForm({ open, editing, onClose, onSaved }: { open: boolean;
                         <span className={st.ok ? 'text-slate-300' : 'text-rose-200'}>{st.detail}</span>
                       </motion.li>
                     ))}
-                    {test.ok && form.https && !form.fingerprint && test.fingerprint && (
+                    {test.ok && form.https && !viaJump && !form.fingerprint && test.fingerprint && (
                       <li className="pt-1 text-[11px] text-slate-500">This certificate will be pinned when you save.</li>
                     )}
                   </motion.ul>

@@ -51,6 +51,21 @@ Use a **local** administrator account (Basic auth doesn't accept domain accounts
 - amber: the port is open but WinRM fails
 - red: the port is unreachable
 
+## Jump host mode (many VMs behind one public IP)
+Hosting providers often put many VMs behind one shared IP and give each VM only a Remote Desktop port (for example `IP:14071`). Opening a WinRM port on every VM is a lot of work, so expose just **one** VM and reach the rest through it:
+
+1. **Jump host.** Pick one VM, have its WinRM port forwarded (HTTPS 5986 recommended), and add it as a normal **Direct** server.
+2. **Every other VM.** Run once, in an admin PowerShell over Remote Desktop:
+   ```powershell
+   Enable-PSRemoting -Force
+   # Only if you sign in with a local admin that is NOT the built-in Administrator:
+   Set-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System LocalAccountTokenFilterPolicy 1
+   ```
+   Find its private IP with `ipconfig`, e.g. `10.0.0.12`.
+3. **In the app,** add the VM with **Route → Via jump host**. Enter its private IP, port 5985 (HTTP inside the private network) and its own credentials. Then click **Test connection**. It checks the jump host, then whether the jump host can reach the target, then the sign-in.
+
+The app connects only to the jump host, which runs `Invoke-Command` against the target. WinRM encrypts that inner hop itself (NTLM or Kerberos), even over HTTP. In a workgroup, the app adds just that target's IP to the jump host's `TrustedHosts`. A server's status dot follows its jump host's reachability, and turns amber if the target fails.
+
 ## Development
 ```bash
 npm install
