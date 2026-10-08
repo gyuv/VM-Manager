@@ -34,7 +34,7 @@ export default function App() {
 
   const stats = useMemo(() => {
     const live = servers.map((s) => state[s.id]).filter(Boolean);
-    const online = live.filter((s) => s.ping?.online).length;
+    const online = live.filter((s) => s.ping?.online && !s.error).length;
     const tel = live.map((s) => s.telemetry).filter((t): t is NonNullable<typeof t> => !!t);
     const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
     const lat = live.map((s) => s.ping?.latencyMs).filter((x): x is number => typeof x === 'number');
@@ -75,7 +75,7 @@ export default function App() {
               onClick={() => setSelectedId(s.id)}
               className={`group flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${selectedId === s.id ? 'bg-sky-400/15 text-white' : 'text-slate-300 hover:bg-white/5'}`}
             >
-              <StatusDot online={state[s.id]?.ping?.online} />
+              <StatusDot online={state[s.id]?.ping?.online} degraded={!!state[s.id]?.error} />
               <span className="flex-1 truncate">{s.name}</span>
               <Pencil size={12} className="opacity-0 group-hover:opacity-60 hover:!opacity-100" onClick={(e) => { e.stopPropagation(); openForm(s); }} />
             </motion.button>

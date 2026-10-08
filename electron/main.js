@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { app, BrowserWindow, Menu, ipcMain, safeStorage, shell } = require('electron');
 const Store = require('electron-store');
-const { runPowerShell, parseJson, tcpPing, SCRIPTS } = require('./remote');
+const { runPowerShell: runRaw, parseJson, tcpPing, testConnection, SCRIPTS } = require('./remote');
 const { Updater } = require('./updater');
 
 const store = new Store({ name: 'servers', defaults: { servers: [] } });
@@ -24,9 +24,9 @@ function decrypt(stored) {
 }
 
 // Accepts "host", "host:port", "[ipv6]:port", or a URL like http://host:port/wsman.
-function splitHostPort(rawHost, rawPort) {
+function splitHostPort(rawHost, rawPort, useHttps) {
   let host = String(rawHost || '').trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '');
-  let port = Number(rawPort) || 5985;
+  let port = Number(rawPort) || (useHttps ? 5986 : 5985);
   let m;
   if ((m = host.match(/^\[([^\]]+)\](?::(\d+))?$/))) {
     host = m[1];
@@ -40,7 +40,39 @@ function splitHostPort(rawHost, rawPort) {
 }
 
 const getRaw = () => store.get('servers');
-const publicView = (s) => ({ id: s.id, name: s.name, host: s.host, port: s.port, username: s.username, hasPassword: !!s.password });
+const publicView = (s) => ({
+  id: s.id,
+  name: s.name,
+  host: s.host,
+  port: s.port,
+  username: s.username,
+  hasPassword: !!s.password,
+  https: !!s.https,
+  allowSelfSigned: !!s.allowSelfSigned,
+  fingerprint: s.fingerprint || '',
+  publicHttp: !s.https && isPublicAddress(s.host),
+});
+
+// True for internet-routable IPv4 literals (where plain-HTTP Basic auth leaks the password).
+function isPublicAddress(host) {
+  const m = String(host).match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  const priv = a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+  return !priv;
+}
+
+function pinFingerprint(id, fingerprint) {
+  const servers = getRaw();
+  const s = servers.find((x) => x.id === id);
+  if (!s || !s.https || s.fingerprint || !s.allowSelfSigned) return;
+  store.set('servers', servers.map((x) => (x.id === id ? { ...x, fingerprint } : x)));
+}
+
+// Runs a script and pins a self-signed certificate on first successful HTTPS use.
+function runPowerShell(server, script, timeoutMs) {
+  return runRaw(server, script, timeoutMs, (fp) => pinFingerprint(server.id, fp));
+}
 
 function getServer(id) {
   const s = getRaw().find((x) => x.id === id);
@@ -63,7 +95,7 @@ store.set(
   'servers',
   store.get('servers').map((s) => {
     try {
-      return { ...s, ...splitHostPort(s.host, s.port) };
+      return { ...s, ...splitHostPort(s.host, s.port, s.https) };
     } catch {
       return s;
     }
@@ -73,7 +105,8 @@ store.set(
 handle('servers:list', () => getRaw().map(publicView));
 
 handle('servers:save', (_e, input) => {
-  const { host, port } = splitHostPort(input.host, input.port);
+  const useHttps = !!input.https;
+  const { host, port } = splitHostPort(input.host, input.port, useHttps);
   if (!host || !/^[A-Za-z0-9.\-:]+$/.test(host)) throw new Error('Invalid host / IP');
   const servers = getRaw();
   const existing = servers.find((s) => s.id === input.id);
@@ -85,6 +118,16 @@ handle('servers:save', (_e, input) => {
     username: String(input.username || '').trim(),
     // Blank password on edit keeps the stored one.
     password: input.password ? encrypt(input.password) : existing ? existing.password : '',
+    https: useHttps,
+    allowSelfSigned: useHttps && !!input.allowSelfSigned,
+    // Keep a pin only while the endpoint stays the same; input.fingerprint lets the form pin/clear explicitly.
+    fingerprint: !useHttps
+      ? ''
+      : typeof input.fingerprint === 'string'
+        ? input.fingerprint
+        : existing && existing.host === host && existing.port === port && existing.https
+          ? existing.fingerprint || ''
+          : '',
   };
   store.set('servers', existing ? servers.map((s) => (s.id === record.id ? record : s)) : [...servers, record]);
   return publicView(record);
@@ -99,6 +142,22 @@ handle('server:ping', (_e, id) => {
   const s = getRaw().find((x) => x.id === id);
   if (!s) throw new Error('Unknown server');
   return tcpPing(s.host, s.port);
+});
+
+// Test unsaved form values; a blank password on an existing server uses the stored one.
+handle('server:test', (_e, input) => {
+  const useHttps = !!input.https;
+  const { host, port } = splitHostPort(input.host, input.port, useHttps);
+  const existing = input.id ? getRaw().find((x) => x.id === input.id) : undefined;
+  return testConnection({
+    host,
+    port,
+    https: useHttps,
+    allowSelfSigned: useHttps && !!input.allowSelfSigned,
+    fingerprint: typeof input.fingerprint === 'string' ? input.fingerprint : undefined,
+    username: String(input.username || '').trim(),
+    password: input.password || (existing ? decrypt(existing.password) : ''),
+  });
 });
 
 handle('server:telemetry', async (_e, id) => parseJson(await runPowerShell(getServer(id), SCRIPTS.telemetry)));

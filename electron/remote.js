@@ -1,62 +1,131 @@
 'use strict';
-// Agentless remote execution over WinRM (nodejs-winrm). Nothing is installed on the Windows hosts.
+// Agentless remote execution over WinRM (HTTP or HTTPS, see winrm.js). Nothing is installed on the Windows hosts.
 const net = require('net');
-const { shell, command } = require('nodejs-winrm');
+const { WinRMClient, envelope } = require('./winrm');
 
-const DEFAULT_TIMEOUT_MS = 30000;
-
-function unwrap(value) {
-  if (value instanceof Error) throw value;
-  return value;
-}
-
-function withTimeout(promise, ms, label) {
-  let timer;
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
+const DEFAULT_TIMEOUT_MS = 60000;
 
 // Scripts are sent as -EncodedCommand so quoting and special characters never break the command line.
 function encodePowerShell(script) {
-  const wrapped = `$ProgressPreference='SilentlyContinue';$ErrorActionPreference='Continue';${script}`;
+  const wrapped = `$ProgressPreference='SilentlyContinue';$ErrorActionPreference='Continue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;${script}`;
   return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(wrapped, 'utf16le').toString('base64')}`;
 }
 
-async function runPowerShell(server, script, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const params = {
+function clientFor(server, timeoutMs) {
+  return new WinRMClient({
     host: server.host,
-    port: Number(server.port) || 5985,
-    path: '/wsman',
-    auth: 'Basic ' + Buffer.from(`${server.username}:${server.password}`, 'utf8').toString('base64'),
-  };
-  const run = async () => {
-    params.shellId = unwrap(await shell.doCreateShell(params));
-    try {
-      params.command = encodePowerShell(script);
-      params.commandId = unwrap(await command.doExecuteCommand(params));
-      return String(unwrap(await command.doReceiveOutput(params)) ?? '');
-    } finally {
-      shell.doDeleteShell(params).catch(() => {});
-    }
-  };
+    port: Number(server.port) || (server.https ? 5986 : 5985),
+    https: !!server.https,
+    username: server.username,
+    password: server.password,
+    allowSelfSigned: !!server.allowSelfSigned,
+    fingerprint: server.fingerprint || undefined,
+    timeoutMs: Math.min(timeoutMs, 60000),
+  });
+}
+
+// PowerShell writes progress/errors to stderr as CLIXML; turn that into readable text.
+function cleanStderr(text) {
+  if (!text.includes('#< CLIXML')) return text.trim();
+  return [...text.matchAll(/<S S="Error">([\s\S]*?)<\/S>/g)]
+    .map((m) => m[1].replace(/_x000D__x000A_/g, '\n').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'))
+    .join('')
+    .trim();
+}
+
+/**
+ * Runs a PowerShell script. Resolves with stdout; `onPeerFingerprint` receives the
+ * server's certificate fingerprint over HTTPS so the caller can pin it (trust on first use).
+ */
+async function runPowerShell(server, script, timeoutMs = DEFAULT_TIMEOUT_MS, onPeerFingerprint) {
+  const client = clientFor(server, timeoutMs);
   try {
-    return await withTimeout(run(), timeoutMs, 'WinRM command');
+    const { stdout, stderr, exitCode } = await client.run(encodePowerShell(script), { deadlineMs: timeoutMs });
+    if (client.peerFingerprint && onPeerFingerprint) onPeerFingerprint(client.peerFingerprint);
+    const err = cleanStderr(stderr);
+    if (exitCode && !stdout.trim()) throw new Error(err || `Command failed with exit code ${exitCode}`);
+    return stdout;
   } catch (err) {
     throw new Error(describeError(err));
+  } finally {
+    client.close();
   }
 }
 
 function describeError(err) {
   const msg = err && err.message ? err.message : String(err);
+  const code = err && err.code;
+  if (['EAUTH', 'ECERTPIN', 'ECERTUNTRUSTED', 'EFAULT', 'EHTTP'].includes(code)) return msg;
   if (/ENOTFOUND|EAI_AGAIN/.test(msg)) return 'Host name could not be resolved — check the Host field (put the port in the port box).';
-  if (/ECONNREFUSED/.test(msg)) return 'Connection refused — is WinRM enabled (winrm quickconfig)?';
-  if (/ETIMEDOUT|EHOSTUNREACH|timed out/.test(msg)) return 'Host unreachable or timed out';
-  if (/401|Unauthorized|AccessDenied|status Code/i.test(msg)) return 'WinRM rejected the request — check credentials, Basic auth and AllowUnencrypted';
+  if (/ECONNREFUSED/.test(msg)) return 'Connection refused — is WinRM listening on this port?';
+  if (/ECONNRESET|socket hang up|HPE_|Parse Error/i.test(msg)) return 'Connection reset — the port may not be WinRM, or HTTP/HTTPS is set the wrong way round.';
+  if (/EPROTO|SSL|TLS|wrong version number/i.test(msg)) return 'TLS handshake failed — this port is probably not WinRM over HTTPS.';
+  if (/ETIMEDOUT|EHOSTUNREACH|timed out/i.test(msg)) return 'Host unreachable or timed out';
   return msg;
+}
+
+/** Step-by-step diagnosis used by the "Test connection" button. */
+async function testConnection(server) {
+  const steps = [];
+  const add = (id, ok, detail) => steps.push({ id, ok, detail });
+  const port = Number(server.port) || (server.https ? 5986 : 5985);
+  const result = (extra = {}) => ({ ok: steps.every((s) => s.ok !== false), steps, ...extra });
+
+  const ping = await tcpPing(server.host, port, 4000);
+  if (!ping.online) {
+    add('tcp', false, `TCP port ${port} is closed or filtered`);
+    return result();
+  }
+  add('tcp', true, `TCP port ${port} open (${ping.latencyMs} ms)`);
+
+  // Unauthenticated probe: a WinRM listener answers 401 with its auth schemes.
+  const probe = clientFor({ ...server, port, allowSelfSigned: true, fingerprint: undefined }, 10000);
+  let fingerprint;
+  try {
+    const res = await probe.post(envelope({ url: probe.url, action: 'probe' }), { auth: false });
+    fingerprint = probe.peerFingerprint;
+    const schemes = String(res.headers['www-authenticate'] || '');
+    const isWinRM = (res.status === 401 && /Microsoft-HTTPAPI/i.test(String(res.headers.server || ''))) || /Negotiate|Basic|Kerberos/i.test(schemes);
+    if (!isWinRM) {
+      add('winrm', false, `Something answered (HTTP ${res.status}) but it does not look like WinRM`);
+      return result({ fingerprint });
+    }
+    add('winrm', true, `WinRM ${server.https ? 'HTTPS' : 'HTTP'} listener found${schemes ? ` · offers ${schemes.split(',').map((x) => x.trim().split(' ')[0]).join(', ')}` : ''}`);
+    if (schemes && !/Basic/i.test(schemes)) {
+      add('basic', false, 'Basic authentication is disabled on the server: Set-Item WSMan:\\localhost\\Service\\Auth\\Basic $true');
+      return result({ fingerprint });
+    }
+  } catch (err) {
+    const detail = server.https
+      ? 'No TLS/WinRM on this port — try HTTP, or this may be an RDP port'
+      : 'No HTTP/WinRM on this port — try HTTPS, or this may be an RDP port';
+    add('winrm', false, `${detail} (${describeError(err)})`);
+    return result();
+  } finally {
+    probe.close();
+  }
+
+  if (server.https && fingerprint) {
+    if (server.fingerprint && server.fingerprint.toUpperCase() !== fingerprint.toUpperCase()) {
+      add('cert', false, 'Certificate does not match the pinned fingerprint');
+      return result({ fingerprint });
+    }
+    add('cert', true, server.fingerprint ? 'Certificate matches pinned fingerprint' : `Certificate SHA-256 ${fingerprint.slice(0, 23)}…`);
+  }
+
+  try {
+    const out = await runPowerShell(
+      { ...server, port },
+      `$os=Get-CimInstance Win32_OperatingSystem; [pscustomobject]@{host=$env:COMPUTERNAME; os=$os.Caption; build=$os.BuildNumber; ps=$PSVersionTable.PSVersion.ToString()} | ConvertTo-Json -Compress`,
+      30000,
+    );
+    const info = parseJson(out);
+    add('auth', true, `Signed in · ${info.host} · ${info.os} (build ${info.build}) · PowerShell ${info.ps}`);
+    return result({ fingerprint, info });
+  } catch (err) {
+    add('auth', false, err.message);
+    return result({ fingerprint });
+  }
 }
 
 function parseJson(output) {
@@ -67,6 +136,7 @@ function parseJson(output) {
 
 // TCP connect latency to the WinRM port: works without ICMP and without root.
 function tcpPing(host, port = 5985, timeoutMs = 2000) {
+  port = Number(port) || 5985;
   return new Promise((resolve) => {
     const started = process.hrtime.bigint();
     const socket = net.connect({ host, port: Number(port) || 5985 });
@@ -132,4 +202,4 @@ $after=(Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'").FreeSpace
   kill: (pid) => `Stop-Process -Id ${pid} -Force -ErrorAction Stop; 'Process ${pid} terminated'`,
 };
 
-module.exports = { runPowerShell, parseJson, tcpPing, SCRIPTS };
+module.exports = { runPowerShell, parseJson, tcpPing, testConnection, SCRIPTS };
