@@ -133,6 +133,7 @@ export default function App() {
       <ServerForm
         open={formOpen}
         editing={editing}
+        servers={servers}
         onClose={() => setFormOpen(false)}
         onSaved={(deletedId) => {
           if (deletedId && deletedId === selectedId) setSelectedId(null);

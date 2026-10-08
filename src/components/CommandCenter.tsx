@@ -72,7 +72,7 @@ export function CommandCenter({ server, onToast }: { server: Server; onToast: (m
       <div>
         <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-sky-300"><Zap size={14} />Command Center</div>
         <div className="mt-1 truncate text-lg font-semibold">{server.name}</div>
-        <div className="text-xs text-slate-500">{server.username}@{server.host}:{server.port}</div>
+        <div className="text-xs text-slate-500">{server.username}@{server.host}:{server.port}{server.via ? ` · via ${server.viaName}` : ''}</div>
       </div>
 
       {/* Smart Boost */}

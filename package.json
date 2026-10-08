@@ -1,7 +1,7 @@
 {
   "name": "winremoteops",
   "productName": "WinRemoteOps",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Agentless macOS dashboard to monitor and manage remote Windows servers over WinRM.",
   "author": "WinRemoteOps",
   "license": "MIT",
