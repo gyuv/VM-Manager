@@ -1,0 +1,50 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-mac-release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:mac-universal
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WinRemoteOps-macOS
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/latest-mac.yml
+
+      # Publish the DMGs and portable ZIPs to GitHub Releases as v<package version>.
+      - name: Publish GitHub release
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          TAG="v$(node -p "require('./package.json').version")"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$TARGET_SHA" --title "WinRemoteOps $TAG" \
+              --notes "macOS builds (ad-hoc signed). DMG = installer, -portable.zip = standalone .app. Pick universal if unsure; x64 = Intel, arm64 = Apple Silicon. First launch: right-click the app → Open."
+          fi
+          gh release upload "$TAG" dist/*.dmg dist/*.zip dist/latest-mac.yml --clobber
