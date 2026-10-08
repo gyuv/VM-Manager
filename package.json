@@ -12,8 +12,8 @@
     "build": "tsc --noEmit && vite build",
     "start": "electron .",
     "check:main": "node --check electron/main.js && node --check electron/preload.js && node --check electron/remote.js",
-    "build:mac": "npm run build && electron-builder --mac dmg --universal",
-    "build:mac-universal": "npm run build && electron-builder --mac --x64 --arm64 --universal"
+    "build:mac": "npm run build && electron-builder --mac dmg --universal --publish never",
+    "build:mac-universal": "npm run build && electron-builder --mac --x64 --arm64 --universal --publish never"
   },
   "dependencies": {
     "electron-store": "^8.2.0",
@@ -42,30 +42,63 @@
   "build": {
     "appId": "com.winremoteops.app",
     "productName": "WinRemoteOps",
-    "directories": { "output": "dist", "buildResources": "build" },
-    "files": ["electron/**/*", "renderer/**/*", "package.json"],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
     "mac": {
       "category": "public.app-category.utilities",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64", "universal"] },
-        { "target": "zip", "arch": ["x64", "arm64", "universal"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64",
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64",
+            "universal"
+          ]
+        }
       ],
       "identity": "-",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "darkModeSupport": true
+      "darkModeSupport": true,
+      "artifactName": "WinRemoteOps-${version}-${arch}-portable.${ext}"
     },
     "dmg": {
       "title": "WinRemoteOps ${version}",
       "artifactName": "WinRemoteOps-${version}-${arch}.dmg",
       "background": "build/background.png",
       "iconSize": 96,
-      "window": { "width": 600, "height": 400 },
+      "window": {
+        "width": 600,
+        "height": 400
+      },
       "contents": [
-        { "x": 150, "y": 200, "type": "file" },
-        { "x": 450, "y": 200, "type": "link", "path": "/Applications" }
+        {
+          "x": 150,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 450,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
-    },
-    "zip": { "artifactName": "WinRemoteOps-${version}-${arch}-portable.zip" }
+    }
   }
 }
