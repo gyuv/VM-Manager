@@ -116,6 +116,7 @@ class WinRMClient {
     const cert = socket.getPeerCertificate();
     if (!cert || !cert.fingerprint256) throw new WinRMError('Server sent no TLS certificate', 'ETLS');
     this.peerFingerprint = cert.fingerprint256;
+    this.peerName = (cert.subject && cert.subject.CN) || '';
     if (o.fingerprint) {
       if (o.fingerprint.toUpperCase() !== cert.fingerprint256.toUpperCase()) {
         throw new WinRMError(
@@ -138,6 +139,11 @@ class WinRMClient {
       const hostPort = this.hostPorts[0];
       try {
         const res = await this.postOnce(xml.replace(/<a:To>[^<]*<\/a:To>/, `<a:To>${xmlEscape(this.urlFor(hostPort))}</a:To>`), hostPort, opts);
+        // HTTP.sys answers 400 (Invalid Hostname) / 404 when the Host port matches no listener; try the next port.
+        if ((res.status === 400 || res.status === 404) && this.hostPorts.length > 1) {
+          this.hostPorts.shift();
+          continue;
+        }
         hostPortCache.set(this.cacheKey, hostPort);
         return res;
       } catch (e) {

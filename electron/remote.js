@@ -142,9 +142,11 @@ async function testConnection(server) {
   // Unauthenticated probe: a WinRM listener answers 401 with its auth schemes.
   const probe = clientFor({ ...server, port, allowSelfSigned: true, fingerprint: undefined }, 10000);
   let fingerprint;
+  let peerName;
   try {
     const res = await probe.post(envelope({ url: probe.url, action: 'probe' }), { auth: false });
     fingerprint = probe.peerFingerprint;
+    peerName = probe.peerName;
     const schemes = String(res.headers['www-authenticate'] || '');
     const isWinRM = (res.status === 401 && /Microsoft-HTTPAPI/i.test(String(res.headers.server || ''))) || /Negotiate|Basic|Kerberos/i.test(schemes);
     if (!isWinRM) {
@@ -171,7 +173,7 @@ async function testConnection(server) {
       add('cert', false, 'Certificate does not match the pinned fingerprint');
       return result({ fingerprint });
     }
-    add('cert', true, server.fingerprint ? 'Certificate matches pinned fingerprint' : `Certificate SHA-256 ${fingerprint.slice(0, 23)}…`);
+    add('cert', true, `${server.fingerprint ? 'Certificate matches pinned fingerprint' : `Certificate SHA-256 ${fingerprint.slice(0, 23)}…`}${peerName ? ` · issued to ${peerName}` : ''}`);
   }
 
   try {
