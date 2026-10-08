@@ -22,6 +22,13 @@ const ACTIONS = {
   signal: 'http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Signal',
 };
 
+// Port that worked in the Host header for each endpoint (see WinRMClient.hostPorts).
+const hostPortCache = new Map();
+
+// Failures that mean "the server dropped us after reading the request", which is how
+// HTTP.sys reacts when the Host header port doesn't match the WinRM listener port.
+const isDropped = (e) => /ECONNRESET|socket hang up|EPIPE|alert internal error|SSL_read|bad record mac/i.test(`${e && e.code} ${e && e.message}`);
+
 class WinRMError extends Error {
   constructor(message, code, extra = {}) {
     super(message);
@@ -80,13 +87,24 @@ class WinRMClient {
   constructor(o) {
     this.o = o;
     const scheme = o.https ? 'https' : 'http';
-    const hostPart = o.host.includes(':') ? `[${o.host}]` : o.host;
-    this.url = `${scheme}://${hostPart}:${o.port}/wsman`;
+    this.hostPart = o.host.includes(':') ? `[${o.host}]` : o.host;
+    this.cacheKey = `${scheme}://${this.hostPart}:${o.port}`;
+    // Behind port forwarding (public 14072 -> private 5986) HTTP.sys only accepts a Host
+    // header naming the listener's own port, so try the standard port first, then the real one.
+    const std = o.https ? 5986 : 5985;
+    const cached = hostPortCache.get(this.cacheKey);
+    this.hostPorts = [...new Set([cached, ...(o.port === std ? [std] : [std, o.port])].filter(Boolean))];
+    this.scheme = scheme;
+    this.url = this.urlFor(this.hostPorts[0]);
     this.auth = 'Basic ' + Buffer.from(`${o.username}:${o.password}`, 'utf8').toString('base64');
     this.agent = o.https
       ? new https.Agent({ keepAlive: true, maxSockets: 1, rejectUnauthorized: false })
       : new http.Agent({ keepAlive: true, maxSockets: 1 });
     this.peerFingerprint = undefined;
+  }
+
+  urlFor(port) {
+    return `${this.scheme}://${this.hostPart}:${port}/wsman`;
   }
 
   close() {
@@ -115,7 +133,28 @@ class WinRMClient {
     }
   }
 
-  post(xml, { auth = true } = {}) {
+  async post(xml, opts = {}) {
+    for (;;) {
+      const hostPort = this.hostPorts[0];
+      try {
+        const res = await this.postOnce(xml.replace(/<a:To>[^<]*<\/a:To>/, `<a:To>${xmlEscape(this.urlFor(hostPort))}</a:To>`), hostPort, opts);
+        hostPortCache.set(this.cacheKey, hostPort);
+        return res;
+      } catch (e) {
+        if (this.hostPorts.length > 1 && isDropped(e) && !(e instanceof WinRMError)) {
+          this.hostPorts.shift();
+          this.agent.destroy(); // fresh connection for the next attempt
+          this.agent = this.o.https
+            ? new https.Agent({ keepAlive: true, maxSockets: 1, rejectUnauthorized: false })
+            : new http.Agent({ keepAlive: true, maxSockets: 1 });
+          continue;
+        }
+        throw e;
+      }
+    }
+  }
+
+  postOnce(xml, hostPort, { auth = true } = {}) {
     const { o } = this;
     const mod = o.https ? https : http;
     return new Promise((resolve, reject) => {
@@ -131,6 +170,7 @@ class WinRMClient {
             'Content-Type': 'application/soap+xml;charset=UTF-8',
             'Content-Length': Buffer.byteLength(xml),
             'User-Agent': 'WinRemoteOps',
+            Host: `${this.hostPart}:${hostPort}`,
             ...(auth ? { Authorization: this.auth } : {}),
           },
           timeout: o.timeoutMs || 30000,
