@@ -1,7 +1,7 @@
 {
   "name": "winremoteops",
   "productName": "WinRemoteOps",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Agentless macOS dashboard to monitor and manage remote Windows servers over WinRM.",
   "author": "WinRemoteOps",
   "license": "MIT",
@@ -13,7 +13,7 @@
     "start": "electron .",
     "check:main": "node --check electron/main.js && node --check electron/preload.js && node --check electron/remote.js",
     "build:mac": "npm run build && electron-builder --mac dmg --universal --publish never",
-    "build:mac-universal": "npm run build && electron-builder --mac --x64 --arm64 --universal --publish never"
+    "build:mac-universal": "npm run build && electron-builder --mac --x64 --publish never && electron-builder --mac --arm64 --publish never && electron-builder --mac --universal --publish never"
   },
   "dependencies": {
     "electron-store": "^8.2.0",
@@ -55,20 +55,10 @@
       "category": "public.app-category.utilities",
       "target": [
         {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64",
-            "universal"
-          ]
+          "target": "dmg"
         },
         {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64",
-            "universal"
-          ]
+          "target": "zip"
         }
       ],
       "identity": "-",

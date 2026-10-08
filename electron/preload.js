@@ -13,6 +13,26 @@ contextBridge.exposeInMainWorld('api', {
   networkReset: (id) => ipcRenderer.invoke('action:networkReset', id),
   diskCleanup: (id) => ipcRenderer.invoke('action:diskCleanup', id),
   power: (id, mode) => ipcRenderer.invoke('action:power', id, mode),
+  appInfo: () => ipcRenderer.invoke('app:info'),
+  updater: {
+    state: () => ipcRenderer.invoke('updater:state'),
+    check: () => ipcRenderer.invoke('updater:check'),
+    download: () => ipcRenderer.invoke('updater:download'),
+    cancel: () => ipcRenderer.invoke('updater:cancel'),
+    install: () => ipcRenderer.invoke('updater:install'),
+    getSettings: () => ipcRenderer.invoke('updater:getSettings'),
+    setSettings: (patch) => ipcRenderer.invoke('updater:setSettings', patch),
+    onState: (cb) => {
+      const l = (_e, s) => cb(s);
+      ipcRenderer.on('updater:state', l);
+      return () => ipcRenderer.removeListener('updater:state', l);
+    },
+    onOpenRequest: (cb) => {
+      const l = () => cb();
+      ipcRenderer.on('ui:openUpdates', l);
+      return () => ipcRenderer.removeListener('ui:openUpdates', l);
+    },
+  },
   onBoostProgress: (cb) => {
     const listener = (_e, payload) => cb(payload);
     ipcRenderer.on('boost:progress', listener);

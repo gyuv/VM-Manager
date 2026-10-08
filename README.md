@@ -14,6 +14,16 @@ Agentless macOS desktop app (Electron + React + Vite + Tailwind + TypeScript) fo
 - Credentials stored with `electron-store`; passwords are encrypted with Electron `safeStorage` (macOS Keychain).
 - macOS glass look via `vibrancy: 'under-window'` and a hidden-inset title bar.
 
+## In-app updates
+WinRemoteOps updates itself from this repo's GitHub Releases. It doesn't use Squirrel.Mac, which rejects ad-hoc-signed apps.
+- Checks on launch and every 4 hours. You can also use **WinRemoteOps → Check for Updates…** or the version pill at the bottom of the sidebar.
+- Downloads the new portable ZIP in the background with live progress and speed, then verifies its SHA-512 against `latest-mac.yml`.
+- A banner offers **Restart now**. The app quits, swaps the `.app` bundle in place (rolling back if the swap fails), clears quarantine and relaunches.
+- Auto-check and auto-download can be turned off in the Update Center.
+- The app must be in a writable folder such as `/Applications`, not running from the DMG. The repo must be public, because the app checks GitHub without signing in.
+
+To ship an update, bump `version` in `package.json` and let the **Build macOS** workflow run. It publishes `v<version>` with the DMGs, ZIPs and `latest-mac.yml`.
+
 ## Preparing the Windows servers
 Run in an elevated PowerShell on each server (lab / trusted network — HTTP + Basic auth):
 ```powershell

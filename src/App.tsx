@@ -10,12 +10,15 @@ import { ServerCard } from './components/ServerCard';
 import { ServerForm } from './components/ServerForm';
 import { StatusDot } from './components/StatusDot';
 import { useFleet } from './hooks/useFleet';
+import { useUpdater } from './hooks/useUpdater';
+import { UpdateBanner, UpdateCenter, UpdatePill } from './components/UpdateCenter';
 import type { Server } from './types';
 
 type Toast = { id: number; msg: string; ok: boolean };
 
 export default function App() {
   const { servers, state, reload } = useFleet();
+  const updater = useUpdater();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Server | undefined>();
@@ -78,7 +81,7 @@ export default function App() {
             </motion.button>
           ))}
         </div>
-        <div className="p-4 text-[10px] text-slate-600">v1.0.0 · polling every 3s</div>
+        <div className="p-2"><UpdatePill u={updater} /></div>
       </nav>
 
       {/* Main content */}
@@ -123,6 +126,9 @@ export default function App() {
       </main>
 
       <AnimatePresence>{selected && <CommandCenter key={selected.id} server={selected} onToast={toast} />}</AnimatePresence>
+
+      <UpdateBanner u={updater} />
+      <UpdateCenter u={updater} />
 
       <ServerForm
         open={formOpen}

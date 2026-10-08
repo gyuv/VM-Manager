@@ -63,7 +63,41 @@ export interface HistoryPoint {
   ram: number;
 }
 
+export type UpdateStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'installing' | 'error';
+
+export interface UpdateState {
+  status: UpdateStatus;
+  currentVersion: string;
+  latestVersion?: string;
+  releaseName?: string;
+  releaseNotes?: string;
+  releaseUrl?: string;
+  publishedAt?: string;
+  size?: number;
+  checkedAt?: number;
+  verified?: boolean;
+  error?: string;
+  progress?: { percent: number; transferred: number; total: number; bytesPerSecond: number };
+}
+
+export interface UpdateSettings {
+  autoCheck: boolean;
+  autoDownload: boolean;
+}
+
 export interface WinRemoteOpsApi {
+  appInfo(): Promise<IpcResult<{ version: string; platform: string; arch: string; packaged: boolean }>>;
+  updater: {
+    state(): Promise<IpcResult<UpdateState>>;
+    check(): Promise<IpcResult<UpdateState>>;
+    download(): Promise<IpcResult<UpdateState>>;
+    cancel(): Promise<IpcResult<void>>;
+    install(): Promise<IpcResult<void>>;
+    getSettings(): Promise<IpcResult<UpdateSettings>>;
+    setSettings(p: Partial<UpdateSettings>): Promise<IpcResult<UpdateSettings>>;
+    onState(cb: (s: UpdateState) => void): () => void;
+    onOpenRequest(cb: () => void): () => void;
+  };
   listServers(): Promise<IpcResult<Server[]>>;
   saveServer(s: ServerInput): Promise<IpcResult<Server>>;
   deleteServer(id: string): Promise<IpcResult<boolean>>;

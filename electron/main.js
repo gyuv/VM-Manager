@@ -1,11 +1,13 @@
 'use strict';
 const path = require('path');
 const crypto = require('crypto');
-const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, safeStorage, shell } = require('electron');
 const Store = require('electron-store');
 const { runPowerShell, parseJson, tcpPing, SCRIPTS } = require('./remote');
+const { Updater } = require('./updater');
 
 const store = new Store({ name: 'servers', defaults: { servers: [] } });
+const updater = new Updater(store);
 
 // Passwords are encrypted with the macOS Keychain-backed safeStorage key before hitting disk.
 function encrypt(plain) {
@@ -110,6 +112,46 @@ handle('action:power', async (_e, id, mode) => {
   return runPowerShell(getServer(id), SCRIPTS[mode]);
 });
 
+handle('app:info', () => ({ version: app.getVersion(), platform: process.platform, arch: process.arch, packaged: app.isPackaged }));
+handle('updater:state', () => updater.state);
+handle('updater:check', () => updater.check());
+handle('updater:download', () => updater.download());
+handle('updater:cancel', () => updater.cancel());
+handle('updater:install', () => updater.install());
+handle('updater:getSettings', () => updater.settings);
+handle('updater:setSettings', (_e, patch) =>
+  updater.setSettings({
+    ...(typeof patch.autoCheck === 'boolean' ? { autoCheck: patch.autoCheck } : {}),
+    ...(typeof patch.autoDownload === 'boolean' ? { autoDownload: patch.autoDownload } : {}),
+  }),
+);
+
+function buildMenu(win) {
+  const send = (channel) => win.webContents.send(channel);
+  const template = [
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { label: 'Check for Updates…', click: () => { send('ui:openUpdates'); updater.check(); } },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+    { role: 'help', submenu: [{ label: 'Releases on GitHub', click: () => shell.openExternal('https://github.com/gyuv/VM-Manager/releases') }] },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function createWindow() {
   const isMac = process.platform === 'darwin';
   const win = new BrowserWindow({
@@ -137,12 +179,16 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  updater.attach(win);
+  buildMenu(win);
+
   if (process.env.VITE_DEV_SERVER_URL) win.loadURL(process.env.VITE_DEV_SERVER_URL);
   else win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 }
 
 app.whenReady().then(() => {
   createWindow();
+  updater.start();
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 app.on('window-all-closed', () => process.platform !== 'darwin' && app.quit());

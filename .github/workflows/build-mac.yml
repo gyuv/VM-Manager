@@ -32,6 +32,7 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
+            dist/latest-mac.yml
 
       # Publish the DMGs and portable ZIPs to GitHub Releases as v<package version>.
       - name: Publish GitHub release
@@ -45,4 +46,4 @@ jobs:
             gh release create "$TAG" --target "$TARGET_SHA" --title "WinRemoteOps $TAG" \
               --notes "macOS builds (ad-hoc signed). DMG = installer, -portable.zip = standalone .app. Pick universal if unsure; x64 = Intel, arm64 = Apple Silicon. First launch: right-click the app → Open."
           fi
-          gh release upload "$TAG" dist/*.dmg dist/*.zip --clobber
+          gh release upload "$TAG" dist/*.dmg dist/*.zip dist/latest-mac.yml --clobber
