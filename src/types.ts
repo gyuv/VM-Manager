@@ -116,7 +116,27 @@ export interface UpdateSettings {
   autoDownload: boolean;
 }
 
+export interface TailscalePeer {
+  id: string;
+  name: string;
+  dnsName: string;
+  ip: string;
+  os: string;
+  online: boolean;
+  lastSeen: string;
+}
+
+export interface TailscaleStatus {
+  installed: boolean;
+  backendState: string;
+  self: { name: string; ip: string } | null;
+  peers: TailscalePeer[];
+}
+
 export interface WinRemoteOpsApi {
+  tailscaleStatus(): Promise<IpcResult<TailscaleStatus>>;
+  tailscaleScript(o: { authKey: string }): Promise<IpcResult<string>>;
+  importServers(p: { peers: { name: string; ip: string }[]; username: string; password: string }): Promise<IpcResult<Server[]>>;
   appInfo(): Promise<IpcResult<{ version: string; platform: string; arch: string; packaged: boolean }>>;
   updater: {
     state(): Promise<IpcResult<UpdateState>>;

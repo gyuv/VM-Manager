@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, ArrowLeft, Clock, Gauge as GaugeIcon, LayoutGrid, Pencil, Plus, Server as ServerIcon, Wifi } from 'lucide-react';
+import { Activity, ArrowLeft, Clock, Gauge as GaugeIcon, LayoutGrid, Pencil, Plus, Server as ServerIcon, Waypoints, Wifi } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { diskPct, ramPct } from './api';
 import { CommandCenter } from './components/CommandCenter';
@@ -12,6 +12,7 @@ import { StatusDot } from './components/StatusDot';
 import { useFleet } from './hooks/useFleet';
 import { useUpdater } from './hooks/useUpdater';
 import { UpdateBanner, UpdateCenter, UpdatePill } from './components/UpdateCenter';
+import { TailscalePanel } from './components/TailscalePanel';
 import type { Server } from './types';
 
 type Toast = { id: number; msg: string; ok: boolean };
@@ -23,6 +24,7 @@ export default function App() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Server | undefined>();
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [tsOpen, setTsOpen] = useState(false);
 
   const selected = servers.find((s) => s.id === selectedId) ?? null;
 
@@ -88,7 +90,10 @@ export default function App() {
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="drag flex h-12 shrink-0 items-center justify-between px-6">
           <div className="text-sm text-slate-400">{selected ? selected.name : 'Fleet Overview'}</div>
-          <button onClick={() => openForm()} className="no-drag flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/15"><Plus size={14} />Add server</button>
+          <div className="no-drag flex gap-2">
+            <button onClick={() => setTsOpen(true)} className="flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-500/25"><Waypoints size={14} />Tailscale</button>
+            <button onClick={() => openForm()} className="flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/15"><Plus size={14} />Add server</button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto px-6 pb-6">
@@ -127,6 +132,7 @@ export default function App() {
 
       <AnimatePresence>{selected && <CommandCenter key={selected.id} server={selected} onToast={toast} />}</AnimatePresence>
 
+      <TailscalePanel open={tsOpen} servers={servers} onClose={() => setTsOpen(false)} onImported={(n) => { reload(); toast(n ? `Imported ${n} VM${n === 1 ? '' : 's'} from Tailscale` : 'Nothing new to import'); }} />
       <UpdateBanner u={updater} />
       <UpdateCenter u={updater} />
 
@@ -205,6 +211,7 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
       <div className="text-lg font-semibold">No servers yet</div>
       <p className="max-w-sm text-sm text-slate-400">Add a Windows server with WinRM enabled. Nothing gets installed on the server — everything runs over PowerShell remoting.</p>
       <button onClick={onAdd} className="mt-2 rounded-lg bg-gradient-to-r from-sky-500 to-violet-500 px-5 py-2 text-sm font-medium">Add your first server</button>
+      <p className="text-xs text-slate-500">VMs behind a provider's NAT? Use <b>Tailscale</b> (top right) — no port forwarding needed.</p>
     </div>
   );
 }

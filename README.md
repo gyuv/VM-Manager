@@ -24,6 +24,14 @@ WinRemoteOps updates itself from this repo's GitHub Releases. It doesn't use Squ
 
 To ship an update, bump `version` in `package.json` and let the **Build macOS** workflow run. It publishes `v<version>` with the DMGs, ZIPs and `latest-mac.yml`.
 
+## Recommended: connect VMs with Tailscale (no port forwarding)
+If your VMs sit behind a provider's NAT with only a Remote Desktop port each, don't forward ports at all. Put every VM and your Mac on one **Tailscale** network (free for up to 100 devices). Each VM connects **outbound** and gets a private `100.x.y.z` IP your Mac reaches directly, encrypted with WireGuard.
+
+1. Install Tailscale on the Mac and sign in.
+2. In WinRemoteOps, click **Tailscale**, then **1 · Set up each VM**. Paste a reusable auth key (from login.tailscale.com, under Settings → Keys) and copy the generated script.
+3. On each VM, connect with Remote Desktop as usual and paste the script into an **admin PowerShell**. It installs Tailscale, joins the network and enables WinRM on 5985, firewalled to Tailscale addresses only (`100.64.0.0/10`). Existing services and provider ports aren't touched.
+4. Back in the app, go to **2 · Import**, pick the Windows VMs, enter the login and click **Import**.
+
 ## Preparing the Windows servers
 WinRemoteOps talks WS-Management directly over **HTTPS (5986, recommended)** or **HTTP (5985)** with Basic auth. It connects to a forwarded port such as `IP:14071` too, as long as that port forwards to WinRM and not to Remote Desktop (3389).
 

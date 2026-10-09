@@ -76,14 +76,14 @@ export function UpdateCenter({ u }: { u: UpdaterApi }) {
   return (
     <AnimatePresence>
       {u.open && (
-        <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => u.setOpen(false)}>
+        <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => u.setOpen(false)}>
           <motion.div
             onClick={(e) => e.stopPropagation()}
-            initial={{ scale: 0.92, y: 20, opacity: 0 }}
-            animate={{ scale: 1, y: 0, opacity: 1 }}
-            exit={{ scale: 0.95, opacity: 0 }}
+            initial={{ y: 16, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 8, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 260, damping: 24 }}
-            className="glass w-[520px] overflow-hidden bg-slate-900/85"
+            className="modal w-[520px] overflow-hidden "
           >
             <div className="relative bg-gradient-to-br from-sky-500/20 via-violet-500/10 to-transparent p-6">
               <button onClick={() => u.setOpen(false)} className="absolute right-4 top-4 text-slate-400 hover:text-white"><X size={18} /></button>
