@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, ArrowDownToLine, CheckCircle2, ExternalLink, Loader2, RefreshCw, RotateCw, ShieldCheck, Sparkles, X } from 'lucide-react';
 import type { UpdaterApi } from '../hooks/useUpdater';
+import { ReleaseNotes } from './ReleaseNotes';
 import type { UpdateStatus } from '../types';
 
 const fmtBytes = (n?: number) => (!n ? '—' : n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${(n / 1e3).toFixed(0)} KB`);
@@ -119,14 +120,14 @@ export function UpdateCenter({ u }: { u: UpdaterApi }) {
             </div>
 
             {s.releaseNotes && s.status !== 'up-to-date' && (
-              <div className="max-h-48 overflow-y-auto border-t border-white/5 px-6 py-4">
+              <div className="max-h-64 overflow-y-auto border-t border-white/5 px-6 py-4">
                 <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-widest text-slate-500">
-                  <span>What’s new{s.releaseName ? ` · ${s.releaseName}` : ''}</span>
+                  <span>What’s new in v{s.latestVersion}</span>
                   {s.releaseUrl && (
                     <a href={s.releaseUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 normal-case tracking-normal text-sky-300 hover:underline">GitHub <ExternalLink size={11} /></a>
                   )}
                 </div>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-300 select-text">{s.releaseNotes}</p>
+                <ReleaseNotes markdown={s.releaseNotes} />
               </div>
             )}
 
