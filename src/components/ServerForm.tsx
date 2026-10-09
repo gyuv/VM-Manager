@@ -126,15 +126,15 @@ export function ServerForm({ open, editing, servers, onClose, onSaved }: { open:
   return (
     <AnimatePresence>
       {open && (
-        <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+        <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
           <motion.form
             onSubmit={submit}
             onClick={(e) => e.stopPropagation()}
-            initial={{ scale: 0.92, y: 20, opacity: 0 }}
-            animate={{ scale: 1, y: 0, opacity: 1 }}
-            exit={{ scale: 0.95, opacity: 0 }}
+            initial={{ y: 16, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 8, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 260, damping: 24 }}
-            className="glass max-h-[90vh] w-[480px] overflow-y-auto bg-slate-900/80 p-6"
+            className="modal max-h-[90vh] w-[480px] overflow-y-auto  p-6"
           >
             <div className="mb-5 flex items-center justify-between">
               <h2 className="text-lg font-semibold">{editing ? 'Edit server' : 'Add Windows server'}</h2>

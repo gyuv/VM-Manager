@@ -29,3 +29,12 @@ body {
 }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 8px; }
+
+/* Dialogs are solid (no translucency/blur) so text stays crisp over the vibrancy window. */
+.modal {
+  @apply rounded-2xl border border-white/10 bg-slate-900 shadow-[0_24px_64px_rgba(0,0,0,0.6)];
+  -webkit-font-smoothing: antialiased;
+}
+.modal .input {
+  @apply bg-slate-950 border-white/15;
+}

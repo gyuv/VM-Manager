@@ -5,6 +5,8 @@ const { app, BrowserWindow, Menu, ipcMain, safeStorage, shell } = require('elect
 const Store = require('electron-store');
 const { runPowerShell: runRaw, parseJson, tcpPing, testConnection, testViaJump, wrapForJump, detectProtocol, SCRIPTS } = require('./remote');
 const { Updater } = require('./updater');
+const tailscale = require('./tailscale');
+const { tailscaleSetupScript } = require('./setupScript');
 
 const store = new Store({ name: 'servers', defaults: { servers: [] } });
 const updater = new Updater(store);
@@ -180,6 +182,40 @@ handle('server:ping', (_e, id) => {
 });
 
 // Test unsaved form values; a blank password on an existing server uses the stored one.
+handle('tailscale:status', () => tailscale.status());
+handle('tailscale:script', (_e, opts) => tailscaleSetupScript({ authKey: String((opts && opts.authKey) || ''), hostnamePrefix: '' }));
+
+// Bulk-add VMs discovered on the tailnet (WinRM HTTP 5985 — WireGuard encrypts the link).
+handle('servers:import', (_e, { peers, username, password }) => {
+  if (!Array.isArray(peers) || !peers.length) throw new Error('Nothing selected');
+  if (!username || !password) throw new Error('Username and password are required');
+  const servers = getRaw();
+  const added = [];
+  for (const p of peers) {
+    const host = String(p.ip || '').trim();
+    if (!/^[0-9a-fA-F.:]+$/.test(host)) continue;
+    if (servers.some((s) => s.host === host)) continue; // already added
+    const record = {
+      id: crypto.randomUUID(),
+      via: '',
+      name: String(p.name || host).trim(),
+      host,
+      port: 5985,
+      username: String(username).trim(),
+      password: encrypt(password),
+      transport: 'winrm',
+      privateKey: '',
+      https: false,
+      allowSelfSigned: false,
+      fingerprint: '',
+    };
+    servers.push(record);
+    added.push(publicView(record));
+  }
+  store.set('servers', servers);
+  return added;
+});
+
 handle('server:detect', (_e, input) => {
   const { host, port } = splitHostPort(input.host, input.port, !!input.https, input.transport);
   return detectProtocol(host, port);
