@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { AlertTriangle, Cpu, HardDrive, Lock, MemoryStick, Network, Wifi } from 'lucide-react';
+import { AlertTriangle, Cpu, HardDrive, Lock, MemoryStick, Network, Terminal, Wifi } from 'lucide-react';
 import { diskPct, loadColor, ramPct } from '../api';
 import type { ServerState } from '../hooks/useFleet';
 import type { Server } from '../types';
@@ -31,7 +31,8 @@ export function ServerCard({ server, st, selected, onSelect }: { server: Server;
         <div className="flex items-center gap-2 min-w-0">
           <StatusDot online={online} degraded={!!st?.error} />
           <span className="truncate font-semibold">{server.name}</span>
-          {server.https && <span title="HTTPS"><Lock size={12} className="shrink-0 text-emerald-400" /></span>}
+          {server.transport === 'ssh' && <span title="SSH"><Terminal size={12} className="shrink-0 text-emerald-400" /></span>}
+          {server.https && server.transport !== 'ssh' && <span title="HTTPS"><Lock size={12} className="shrink-0 text-emerald-400" /></span>}
           {server.publicHttp && <span title="Plain HTTP to a public IP — password not encrypted"><AlertTriangle size={12} className="shrink-0 text-amber-400" /></span>}
         </div>
         <span className="flex items-center gap-1 text-xs text-slate-400 tabular-nums">

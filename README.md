@@ -51,6 +51,21 @@ Use a **local** administrator account (Basic auth doesn't accept domain accounts
 - amber: the port is open but WinRM fails
 - red: the port is unreachable
 
+## SSH connection method (when WinRM won't work)
+WinRM depends on Windows' web server (HTTP.sys), TLS certificates and the `Host:` header, any of which a provider's port forwarding can break. **SSH** uses Windows' built-in OpenSSH server instead and can listen on whatever port your provider forwards. On the VM, in an admin PowerShell:
+```powershell
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+# No Windows Update access? Install OpenSSH-Win64.msi from github.com/PowerShell/Win32-OpenSSH/releases instead.
+$cfg = "$env:ProgramData\ssh\sshd_config"
+Start-Service sshd; Stop-Service sshd          # first start creates sshd_config
+(Get-Content $cfg) -replace '^#?Port .*', 'Port 15071' | Set-Content $cfg   # the port your provider forwards
+Set-Service sshd -StartupType Automatic; Start-Service sshd
+New-NetFirewallRule -DisplayName "OpenSSH 15071" -Direction Inbound -Protocol TCP -LocalPort 15071 -Action Allow
+```
+In the app, choose **Connection method → SSH**, enter the public IP and port, and fill in the login (password or private key). The host key is pinned the first time you connect.
+
+**Detect what's on this port** in the server form tells you what's actually listening: SSH, WinRM over HTTPS or HTTP, Remote Desktop, a web server, or nothing. Test connection runs the same check first.
+
 ## Jump host mode (many VMs behind one public IP)
 Hosting providers often put many VMs behind one shared IP and give each VM only a Remote Desktop port (for example `IP:14071`). Opening a WinRM port on every VM is a lot of work, so expose just **one** VM and reach the rest through it:
 

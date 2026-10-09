@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('api', {
   listServers: () => ipcRenderer.invoke('servers:list'),
   saveServer: (server) => ipcRenderer.invoke('servers:save', server),
   deleteServer: (id) => ipcRenderer.invoke('servers:delete', id),
+  detectProtocol: (server) => ipcRenderer.invoke('server:detect', server),
   testConnection: (server) => ipcRenderer.invoke('server:test', server),
   ping: (id) => ipcRenderer.invoke('server:ping', id),
   telemetry: (id) => ipcRenderer.invoke('server:telemetry', id),
