@@ -183,18 +183,40 @@ handle('server:ping', (_e, id) => {
 
 // Test unsaved form values; a blank password on an existing server uses the stored one.
 handle('tailscale:status', () => tailscale.status());
-handle('tailscale:script', (_e, opts) => tailscaleSetupScript({ authKey: String((opts && opts.authKey) || ''), hostnamePrefix: '' }));
+handle('tailscale:script', (_e, opts) => {
+  const d = getDefaults();
+  const authKey = String((opts && opts.authKey) || '') || (d.authKey ? decrypt(d.authKey) : '');
+  return tailscaleSetupScript({ authKey, hostnamePrefix: '' });
+});
 
-// Bulk-add VMs discovered on the tailnet (WinRM HTTP 5985 — WireGuard encrypts the link).
-handle('servers:import', (_e, { peers, username, password }) => {
-  if (!Array.isArray(peers) || !peers.length) throw new Error('Nothing selected');
-  if (!username || !password) throw new Error('Username and password are required');
+// ---------- simple mode: saved defaults + automatic import from Tailscale ----------
+const getDefaults = () => ({ username: 'Administrator', password: '', authKey: '', autoImport: true, ...store.get('defaults', {}) });
+
+handle('settings:get', () => {
+  const d = getDefaults();
+  return { username: d.username, hasPassword: !!d.password, hasAuthKey: !!d.authKey, autoImport: d.autoImport !== false };
+});
+
+handle('settings:set', (_e, input) => {
+  const d = getDefaults();
+  store.set('defaults', {
+    ...d,
+    username: input.username !== undefined ? String(input.username).trim() : d.username,
+    password: input.password ? encrypt(input.password) : d.password,
+    authKey: input.authKey ? encrypt(String(input.authKey).trim()) : d.authKey,
+    autoImport: input.autoImport !== undefined ? !!input.autoImport : d.autoImport,
+  });
+  setTimeout(autoImportTick, 200);
+  return true;
+});
+
+// Adds Windows tailnet peers that aren't servers yet (WinRM HTTP 5985 — WireGuard encrypts the link).
+function addTailnetPeers(peers, username, encPassword) {
   const servers = getRaw();
   const added = [];
   for (const p of peers) {
     const host = String(p.ip || '').trim();
-    if (!/^[0-9a-fA-F.:]+$/.test(host)) continue;
-    if (servers.some((s) => s.host === host)) continue; // already added
+    if (!/^[0-9a-fA-F.:]+$/.test(host) || servers.some((s) => s.host === host)) continue;
     const record = {
       id: crypto.randomUUID(),
       via: '',
@@ -202,7 +224,7 @@ handle('servers:import', (_e, { peers, username, password }) => {
       host,
       port: 5985,
       username: String(username).trim(),
-      password: encrypt(password),
+      password: encPassword,
       transport: 'winrm',
       privateKey: '',
       https: false,
@@ -212,9 +234,29 @@ handle('servers:import', (_e, { peers, username, password }) => {
     servers.push(record);
     added.push(publicView(record));
   }
-  store.set('servers', servers);
+  if (added.length) store.set('servers', servers);
   return added;
+}
+
+handle('servers:import', (_e, { peers, username, password }) => {
+  if (!Array.isArray(peers) || !peers.length) throw new Error('Nothing selected');
+  if (!username || !password) throw new Error('Username and password are required');
+  return addTailnetPeers(peers, username, encrypt(password));
 });
+
+let mainWin = null;
+async function autoImportTick() {
+  const d = getDefaults();
+  if (d.autoImport === false || !d.password) return;
+  try {
+    const st = await tailscale.status();
+    if (!st.installed || st.backendState !== 'Running') return;
+    const added = addTailnetPeers(st.peers.filter((p) => p.os === 'windows'), d.username, d.password);
+    if (added.length && mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('servers:added', added.map((a) => a.name));
+  } catch {
+    /* Tailscale not reachable right now; try again next tick */
+  }
+}
 
 handle('server:detect', (_e, input) => {
   const { host, port } = splitHostPort(input.host, input.port, !!input.https, input.transport);
@@ -350,6 +392,7 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  mainWin = win;
   updater.attach(win);
   buildMenu(win);
 
@@ -360,6 +403,8 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
   updater.start();
+  setTimeout(autoImportTick, 3000);
+  setInterval(autoImportTick, 15000);
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 app.on('window-all-closed', () => process.platform !== 'darwin' && app.quit());

@@ -133,7 +133,17 @@ export interface TailscaleStatus {
   peers: TailscalePeer[];
 }
 
+export interface SimpleSettings {
+  username: string;
+  hasPassword: boolean;
+  hasAuthKey: boolean;
+  autoImport: boolean;
+}
+
 export interface WinRemoteOpsApi {
+  getSettings(): Promise<IpcResult<SimpleSettings>>;
+  setSettings(s: { username?: string; password?: string; authKey?: string; autoImport?: boolean }): Promise<IpcResult<boolean>>;
+  onServersAdded(cb: (names: string[]) => void): () => void;
   tailscaleStatus(): Promise<IpcResult<TailscaleStatus>>;
   tailscaleScript(o: { authKey: string }): Promise<IpcResult<string>>;
   importServers(p: { peers: { name: string; ip: string }[]; username: string; password: string }): Promise<IpcResult<Server[]>>;

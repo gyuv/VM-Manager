@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, ArrowLeft, Clock, Gauge as GaugeIcon, LayoutGrid, Pencil, Plus, Server as ServerIcon, Waypoints, Wifi } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { Activity, ArrowLeft, Clock, Gauge as GaugeIcon, LayoutGrid, Pencil, Plus, Server as ServerIcon, Wifi } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { diskPct, ramPct } from './api';
 import { CommandCenter } from './components/CommandCenter';
 import { Gauge } from './components/Gauge';
@@ -12,7 +12,7 @@ import { StatusDot } from './components/StatusDot';
 import { useFleet } from './hooks/useFleet';
 import { useUpdater } from './hooks/useUpdater';
 import { UpdateBanner, UpdateCenter, UpdatePill } from './components/UpdateCenter';
-import { TailscalePanel } from './components/TailscalePanel';
+import { AddVm } from './components/AddVm';
 import type { Server } from './types';
 
 type Toast = { id: number; msg: string; ok: boolean };
@@ -24,7 +24,7 @@ export default function App() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Server | undefined>();
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [tsOpen, setTsOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
 
   const selected = servers.find((s) => s.id === selectedId) ?? null;
 
@@ -33,6 +33,8 @@ export default function App() {
     setToasts((t) => [...t, { id, msg, ok }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4500);
   }, []);
+
+  useEffect(() => window.api.onServersAdded((names) => { reload(); toast(`Added ${names.join(', ')}`); }), [reload, toast]);
 
   const stats = useMemo(() => {
     const live = servers.map((s) => state[s.id]).filter(Boolean);
@@ -67,7 +69,7 @@ export default function App() {
         </button>
         <div className="mt-5 flex items-center justify-between px-5 text-[10px] uppercase tracking-widest text-slate-500">
           <span>Servers</span>
-          <button onClick={() => openForm()} className="rounded p-1 hover:bg-white/10 hover:text-white"><Plus size={14} /></button>
+          <button onClick={() => setAddOpen(true)} className="rounded p-1 hover:bg-white/10 hover:text-white"><Plus size={14} /></button>
         </div>
         <div className="mt-1 flex-1 space-y-0.5 overflow-y-auto px-3">
           {servers.map((s) => (
@@ -90,10 +92,7 @@ export default function App() {
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="drag flex h-12 shrink-0 items-center justify-between px-6">
           <div className="text-sm text-slate-400">{selected ? selected.name : 'Fleet Overview'}</div>
-          <div className="no-drag flex gap-2">
-            <button onClick={() => setTsOpen(true)} className="flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-500/25"><Waypoints size={14} />Tailscale</button>
-            <button onClick={() => openForm()} className="flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/15"><Plus size={14} />Add server</button>
-          </div>
+          <button onClick={() => setAddOpen(true)} className="no-drag flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-sky-500 to-violet-500 px-3 py-1.5 text-xs font-medium shadow-lg shadow-sky-500/20"><Plus size={14} />Add VM</button>
         </header>
 
         <div className="flex-1 overflow-y-auto px-6 pb-6">
@@ -114,7 +113,7 @@ export default function App() {
             ) : (
               <motion.section key="grid" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="mt-6">
                 {servers.length === 0 ? (
-                  <EmptyState onAdd={() => openForm()} />
+                  <EmptyState onAdd={() => setAddOpen(true)} />
                 ) : (
                   <motion.div layout className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
                     <AnimatePresence>
@@ -132,7 +131,7 @@ export default function App() {
 
       <AnimatePresence>{selected && <CommandCenter key={selected.id} server={selected} onToast={toast} />}</AnimatePresence>
 
-      <TailscalePanel open={tsOpen} servers={servers} onClose={() => setTsOpen(false)} onImported={(n) => { reload(); toast(n ? `Imported ${n} VM${n === 1 ? '' : 's'} from Tailscale` : 'Nothing new to import'); }} />
+      <AddVm open={addOpen} servers={servers} onClose={() => setAddOpen(false)} onAdvanced={() => { setAddOpen(false); openForm(); }} onChanged={reload} />
       <UpdateBanner u={updater} />
       <UpdateCenter u={updater} />
 
@@ -209,9 +208,8 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
     <div className="glass flex flex-col items-center justify-center gap-3 py-20 text-center">
       <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-400/30 to-violet-500/30"><ServerIcon size={26} /></div>
       <div className="text-lg font-semibold">No servers yet</div>
-      <p className="max-w-sm text-sm text-slate-400">Add a Windows server with WinRM enabled. Nothing gets installed on the server — everything runs over PowerShell remoting.</p>
-      <button onClick={onAdd} className="mt-2 rounded-lg bg-gradient-to-r from-sky-500 to-violet-500 px-5 py-2 text-sm font-medium">Add your first server</button>
-      <p className="text-xs text-slate-500">VMs behind a provider's NAT? Use <b>Tailscale</b> (top right) — no port forwarding needed.</p>
+      <p className="max-w-sm text-sm text-slate-400">Paste one script on each VM through Remote Desktop and it shows up here. No ports to open.</p>
+      <button onClick={onAdd} className="mt-2 rounded-lg bg-gradient-to-r from-sky-500 to-violet-500 px-5 py-2 text-sm font-medium">Add your VMs</button>
     </div>
   );
 }

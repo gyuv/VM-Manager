@@ -24,15 +24,19 @@ WinRemoteOps updates itself from this repo's GitHub Releases. It doesn't use Squ
 
 To ship an update, bump `version` in `package.json` and let the **Build macOS** workflow run. It publishes `v<version>` with the DMGs, ZIPs and `latest-mac.yml`.
 
-## Recommended: connect VMs with Tailscale (no port forwarding)
-If your VMs sit behind a provider's NAT with only a Remote Desktop port each, don't forward ports at all. Put every VM and your Mac on one **Tailscale** network (free for up to 100 devices). Each VM connects **outbound** and gets a private `100.x.y.z` IP your Mac reaches directly, encrypted with WireGuard.
+## Adding VMs (the simple way)
+Click **Add VM**:
+1. **Connect this Mac:** install Tailscale (free) and sign in. Once only.
+2. **Your VM login:** your Windows username and password, plus a reusable Tailscale auth key. Saved encrypted, once only.
+3. **On each VM:** Remote Desktop in as usual, open PowerShell as Administrator, click **Copy setup script** and paste it.
 
-1. Install Tailscale on the Mac and sign in.
-2. In WinRemoteOps, click **Tailscale**, then **1 · Set up each VM**. Paste a reusable auth key (from login.tailscale.com, under Settings → Keys) and copy the generated script.
-3. On each VM, connect with Remote Desktop as usual and paste the script into an **admin PowerShell**. It installs Tailscale, joins the network and enables WinRM on 5985, firewalled to Tailscale addresses only (`100.64.0.0/10`). Existing services and provider ports aren't touched.
-4. Back in the app, go to **2 · Import**, pick the Windows VMs, enter the login and click **Import**.
+That's it. The VM appears in the dashboard by itself within seconds, and new VMs keep appearing automatically whenever you run the script on them. No ports, IPs or certificates. Your provider's ports and other services on the VM aren't touched. The script joins the VM to your private Tailscale network and allows WinRM only from it.
 
-## Preparing the Windows servers
+Manual setup (WinRM over HTTPS or HTTP, SSH, jump hosts) is still available under **Add VM → Advanced: add a server manually**.
+
+## Advanced: manual connections
+
+### Preparing the Windows servers
 WinRemoteOps talks WS-Management directly over **HTTPS (5986, recommended)** or **HTTP (5985)** with Basic auth. It connects to a forwarded port such as `IP:14071` too, as long as that port forwards to WinRM and not to Remote Desktop (3389).
 
 **HTTPS (use this for anything reachable from the internet).** Run in an elevated PowerShell:
