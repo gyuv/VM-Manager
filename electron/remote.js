@@ -1,7 +1,9 @@
 'use strict';
 // Agentless remote execution over WinRM (HTTP or HTTPS, see winrm.js). Nothing is installed on the Windows hosts.
 const net = require('net');
+const tls = require('tls');
 const { WinRMClient, envelope } = require('./winrm');
+const { sshExec } = require('./ssh');
 
 const DEFAULT_TIMEOUT_MS = 60000;
 
@@ -38,6 +40,7 @@ function cleanStderr(text) {
  * server's certificate fingerprint over HTTPS so the caller can pin it (trust on first use).
  */
 async function runPowerShell(server, script, timeoutMs = DEFAULT_TIMEOUT_MS, onPeerFingerprint) {
+  if (server.transport === 'ssh') return runOverSsh(server, script, timeoutMs, onPeerFingerprint);
   const client = clientFor(server, timeoutMs);
   try {
     const { stdout, stderr, exitCode } = await client.run(encodePowerShell(script), { deadlineMs: timeoutMs });
@@ -52,10 +55,35 @@ async function runPowerShell(server, script, timeoutMs = DEFAULT_TIMEOUT_MS, onP
   }
 }
 
+async function runOverSsh(server, script, timeoutMs, onHostKey) {
+  try {
+    const { stdout, stderr, exitCode, hostKey } = await sshExec(
+      {
+        host: server.host,
+        port: Number(server.port) || 22,
+        username: server.username,
+        password: server.password,
+        privateKey: server.privateKey || undefined,
+        hostKey: server.fingerprint || undefined,
+        timeoutMs,
+      },
+      encodePowerShell(script),
+      { deadlineMs: timeoutMs },
+    );
+    if (hostKey && onHostKey) onHostKey(hostKey);
+    const err = cleanStderr(stderr);
+    if (exitCode && !stdout.trim()) throw new Error(err || `Command failed with exit code ${exitCode}`);
+    return stdout;
+  } catch (err) {
+    throw new Error(describeError(err));
+  }
+}
+
 function describeError(err) {
   const msg = err && err.message ? err.message : String(err);
   const code = err && err.code;
-  if (['EAUTH', 'ECERTPIN', 'ECERTUNTRUSTED', 'EFAULT', 'EHTTP'].includes(code)) return msg;
+  if (['EAUTH', 'ECERTPIN', 'ECERTUNTRUSTED', 'EFAULT', 'EHTTP', 'EHOSTKEY'].includes(code)) return msg;
+  if (/Timed out while waiting for handshake/i.test(msg)) return 'No SSH server answered on this port (handshake timed out).';
   if (/ENOTFOUND|EAI_AGAIN/.test(msg)) return 'Host name could not be resolved — check the Host field (put the port in the port box).';
   if (/ECONNREFUSED/.test(msg)) return 'Connection refused — is WinRM listening on this port?';
   if (/ECONNRESET|socket hang up|HPE_|Parse Error/i.test(msg)) return 'Connection reset — the port may not be WinRM, or HTTP/HTTPS is set the wrong way round.';
@@ -63,6 +91,71 @@ function describeError(err) {
   if (/ETIMEDOUT|EHOSTUNREACH|timed out/i.test(msg)) return 'Host unreachable or timed out';
   return msg;
 }
+
+// ---------- protocol detection ----------
+// Identify what is listening on a port so the user isn't left guessing (RDP vs SSH vs WinRM ...).
+function rawProbe(host, port, payload, waitMs = 2500) {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host, port });
+    const chunks = [];
+    const done = () => {
+      sock.destroy();
+      resolve(Buffer.concat(chunks));
+    };
+    sock.setTimeout(waitMs, done);
+    sock.on('connect', () => payload && sock.write(payload));
+    sock.on('data', (d) => {
+      chunks.push(d);
+      if (Buffer.concat(chunks).length > 64) done();
+    });
+    sock.on('error', done);
+    sock.on('close', done);
+  });
+}
+
+function tlsProbe(host, port) {
+  return new Promise((resolve) => {
+    const s = tls.connect({ host, port, rejectUnauthorized: false, servername: net.isIP(host) ? undefined : host, timeout: 4000 }, () => {
+      const cert = s.getPeerCertificate();
+      s.write(`POST /wsman HTTP/1.1\r\nHost: ${host}:5986\r\nContent-Type: application/soap+xml;charset=UTF-8\r\nContent-Length: 4\r\nConnection: close\r\n\r\n<x/>`);
+      let body = '';
+      s.on('data', (d) => (body += d));
+      const end = () => resolve({ tls: true, cn: (cert && cert.subject && cert.subject.CN) || '', http: body });
+      s.on('end', end);
+      s.on('close', end);
+      setTimeout(() => (s.destroy(), end()), 4000);
+    });
+    s.on('timeout', () => (s.destroy(), resolve({ tls: false })));
+    s.on('error', () => resolve({ tls: false }));
+  });
+}
+
+// RDP X.224 Connection Request with an RDP negotiation request.
+const RDP_PROBE = Buffer.from('030000130ee000000000000100080003000000', 'hex');
+
+/** @returns {Promise<{kind:'ssh'|'rdp'|'winrm-https'|'https'|'winrm-http'|'http'|'unknown'|'closed', detail:string}>} */
+async function detectProtocol(host, port) {
+  const ping = await tcpPing(host, port, 4000);
+  if (!ping.online) return { kind: 'closed', detail: `Port ${port} is closed or filtered` };
+  const banner = await rawProbe(host, port, null, 2000);
+  if (banner.toString('latin1').startsWith('SSH-')) return { kind: 'ssh', detail: `SSH server (${banner.toString('latin1').split(/\r?\n/)[0].trim()})` };
+  const rdp = await rawProbe(host, port, RDP_PROBE, 2500);
+  if (rdp.length >= 11 && rdp[0] === 0x03 && rdp[1] === 0x00 && (rdp[5] & 0xf0) === 0xd0) return { kind: 'rdp', detail: 'Remote Desktop (RDP) — use this port in your RDP app, not here' };
+  const t = await tlsProbe(host, port);
+  if (t.tls) {
+    const winrm = /Microsoft-HTTPAPI/i.test(t.http);
+    return {
+      kind: winrm ? 'winrm-https' : 'https',
+      detail: `${winrm ? 'WinRM over HTTPS' : 'TLS service'}${t.cn ? ` · certificate for ${t.cn}` : ''}${!t.http ? ' · closed the connection after the request' : ''}`,
+    };
+  }
+  const h = await rawProbe(host, port, Buffer.from(`POST /wsman HTTP/1.1\r\nHost: ${host}:5985\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`), 3000);
+  const txt = h.toString('latin1');
+  if (txt.startsWith('HTTP/')) return /Microsoft-HTTPAPI/i.test(txt) ? { kind: 'winrm-http', detail: 'WinRM over HTTP' } : { kind: 'http', detail: `Web server (${txt.split('\r\n')[0]})` };
+  return { kind: 'unknown', detail: 'Port is open but the service did not identify itself' };
+}
+
+const KIND_FOR = { ssh: ['ssh'], 'winrm-https': ['winrm-https', 'https'], 'winrm-http': ['winrm-http', 'http'] };
 
 const psQuote = (v) => `'${String(v).replace(/'/g, "''")}'`;
 
@@ -138,6 +231,25 @@ async function testConnection(server) {
     return result();
   }
   add('tcp', true, `TCP port ${port} open (${ping.latencyMs} ms)`);
+
+  const wanted = server.transport === 'ssh' ? 'ssh' : server.https ? 'winrm-https' : 'winrm-http';
+  const found = await detectProtocol(server.host, port);
+  const matches = KIND_FOR[wanted].includes(found.kind);
+  add('detect', matches, `Detected: ${found.detail}${matches ? '' : ` — but this server is set to ${wanted === 'ssh' ? 'SSH' : wanted === 'winrm-https' ? 'WinRM HTTPS' : 'WinRM HTTP'}`}`);
+  if (!matches) return result({ detected: found.kind });
+
+  if (server.transport === 'ssh') {
+    try {
+      let hostKey;
+      const out = await runPowerShell({ ...server, port }, INFO_SCRIPT, 30000, (k) => (hostKey = k));
+      const info = parseJson(out);
+      add('auth', true, `Signed in over SSH · ${info.host} · ${info.os} (build ${info.build}) · PowerShell ${info.ps}`);
+      return result({ fingerprint: hostKey, info });
+    } catch (err) {
+      add('auth', false, err.message);
+      return result();
+    }
+  }
 
   // Unauthenticated probe: a WinRM listener answers 401 with its auth schemes.
   const probe = clientFor({ ...server, port, allowSelfSigned: true, fingerprint: undefined }, 10000);
@@ -265,4 +377,4 @@ $after=(Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'").FreeSpace
   kill: (pid) => `Stop-Process -Id ${pid} -Force -ErrorAction Stop; 'Process ${pid} terminated'`,
 };
 
-module.exports = { runPowerShell, parseJson, tcpPing, testConnection, testViaJump, wrapForJump, encodePowerShell, SCRIPTS };
+module.exports = { runPowerShell, parseJson, tcpPing, testConnection, testViaJump, wrapForJump, encodePowerShell, detectProtocol, SCRIPTS };

@@ -1,10 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, CheckCircle2, Globe, Loader2, Lock, Network, PlugZap, ShieldCheck, Trash2, Unlock, X, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Globe, KeyRound, Loader2, Lock, Network, PlugZap, Radar, ShieldCheck, Terminal, Trash2, Unlock, X, XCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { call } from '../api';
-import type { ConnectionTest, Server, ServerInput } from '../types';
+import type { ConnectionTest, DetectedKind, Server, ServerInput } from '../types';
 
-const empty: ServerInput = { name: '', host: '', port: 5986, username: 'Administrator', password: '', https: true, allowSelfSigned: true, via: '' };
+const empty: ServerInput = { name: '', host: '', port: 5986, username: 'Administrator', password: '', https: true, allowSelfSigned: true, via: '', transport: 'winrm', privateKey: '' };
 
 const isPublicIp = (h: string) => {
   const m = h.trim().match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
@@ -19,11 +19,14 @@ export function ServerForm({ open, editing, servers, onClose, onSaved }: { open:
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<ConnectionTest | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [detected, setDetected] = useState<{ kind: DetectedKind; detail: string } | null>(null);
 
   useEffect(() => {
     setError('');
     setTest(null);
-    setForm(editing ? { ...editing, password: '', fingerprint: editing.fingerprint } : empty);
+    setForm(editing ? { ...editing, password: '', privateKey: '', fingerprint: editing.fingerprint } : empty);
+    setDetected(null);
   }, [editing, open]);
 
   const set = <K extends keyof ServerInput>(k: K, v: ServerInput[K]) => {
@@ -37,14 +40,39 @@ export function ServerForm({ open, editing, servers, onClose, onSaved }: { open:
     if (m) setForm((f) => ({ ...f, host: m[1], port: Number(m[2]) }));
   };
 
-  // Switching scheme moves the port between the defaults, but leaves custom ports alone.
-  const setScheme = (https: boolean) =>
-    setForm((f) => ({
-      ...f,
-      https,
-      port: f.port === (https ? 5985 : 5986) ? (https ? 5986 : 5985) : f.port,
-      fingerprint: https ? f.fingerprint : '',
-    }));
+  type Mode = 'https' | 'http' | 'ssh';
+  const mode: Mode = form.transport === 'ssh' ? 'ssh' : form.https ? 'https' : 'http';
+  const DEFAULT_PORT: Record<Mode, number> = { https: 5986, http: 5985, ssh: 22 };
+  // Switching mode moves the port between the defaults, but leaves custom ports alone.
+  const setMode = (m: Mode) => {
+    setTest(null);
+    setForm((f) => {
+      const cur: Mode = f.transport === 'ssh' ? 'ssh' : f.https ? 'https' : 'http';
+      if (cur === m) return f;
+      const isDefault = Object.values(DEFAULT_PORT).includes(f.port);
+      return {
+        ...f,
+        transport: m === 'ssh' ? 'ssh' : 'winrm',
+        https: m === 'https',
+        allowSelfSigned: m === 'https',
+        port: isDefault ? DEFAULT_PORT[m] : f.port,
+        fingerprint: '', // a TLS cert pin and an SSH host-key pin aren't interchangeable
+      };
+    });
+  };
+  const MODE_FOR_KIND: Partial<Record<DetectedKind, Mode>> = { ssh: 'ssh', 'winrm-https': 'https', https: 'https', 'winrm-http': 'http', http: 'http' };
+
+  const runDetect = async () => {
+    setDetecting(true);
+    setDetected(null);
+    try {
+      setDetected(await call(window.api.detectProtocol(form)));
+    } catch (err) {
+      setDetected({ kind: 'unknown', detail: (err as Error).message });
+    } finally {
+      setDetecting(false);
+    }
+  };
 
   const runTest = async () => {
     setTesting(true);
@@ -63,7 +91,7 @@ export function ServerForm({ open, editing, servers, onClose, onSaved }: { open:
     setBusy(true);
     try {
       // Pin the certificate the user just verified with "Test connection".
-      const fingerprint = form.https && !viaJump ? form.fingerprint || (test?.ok ? test.fingerprint : undefined) : '';
+      const fingerprint = (mode === 'https' || mode === 'ssh') && !viaJump ? form.fingerprint || (test?.ok ? test.fingerprint : undefined) : '';
       await call(window.api.saveServer({ ...form, fingerprint }));
       onSaved();
       onClose();
@@ -90,10 +118,10 @@ export function ServerForm({ open, editing, servers, onClose, onSaved }: { open:
       ...f,
       via,
       // Inside the private network WinRM normally listens on plain HTTP 5985.
-      ...(via && !f.via ? { https: false, port: 5985, allowSelfSigned: false, fingerprint: '' } : {}),
+      ...(via && !f.via ? { transport: 'winrm' as const, https: false, port: 5985, allowSelfSigned: false, fingerprint: '' } : {}),
       ...(!via && f.via ? { https: true, port: 5986, allowSelfSigned: true } : {}),
     }));
-  const httpPublic = !viaJump && !form.https && isPublicIp(form.host);
+  const httpPublic = !viaJump && mode === 'http' && isPublicIp(form.host);
 
   return (
     <AnimatePresence>
@@ -145,13 +173,17 @@ export function ServerForm({ open, editing, servers, onClose, onSaved }: { open:
                 )}
               </AnimatePresence>
 
-              <Field label="Connection">
-                <div className="grid grid-cols-2 gap-1 rounded-lg bg-black/30 p-1">
-                  {[true, false].map((h) => (
-                    <button key={String(h)} type="button" onClick={() => setScheme(h)}
-                      className={`relative flex items-center justify-center gap-1.5 rounded-md py-1.5 text-sm ${form.https === h ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}>
-                      {form.https === h && <motion.span layoutId="scheme" className="absolute inset-0 rounded-md bg-white/10" />}
-                      <span className="relative flex items-center gap-1.5">{h ? <Lock size={13} /> : <Unlock size={13} />}{h ? 'HTTPS · encrypted' : 'HTTP'}</span>
+              <Field label="Connection method">
+                <div className="grid grid-cols-3 gap-1 rounded-lg bg-black/30 p-1">
+                  {(['https', 'http', 'ssh'] as Mode[]).map((m) => (
+                    <button key={m} type="button" onClick={() => setMode(m)} disabled={m === 'ssh' && viaJump}
+                      title={m === 'ssh' && viaJump ? 'Servers behind a jump host are reached with WinRM from the jump host' : undefined}
+                      className={`relative flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs disabled:opacity-40 ${mode === m ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}>
+                      {mode === m && <motion.span layoutId="mode" className="absolute inset-0 rounded-md bg-white/10" />}
+                      <span className="relative flex items-center gap-1.5">
+                        {m === 'https' ? <Lock size={12} /> : m === 'http' ? <Unlock size={12} /> : <Terminal size={12} />}
+                        {m === 'https' ? 'WinRM HTTPS' : m === 'http' ? 'WinRM HTTP' : 'SSH'}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -161,10 +193,28 @@ export function ServerForm({ open, editing, servers, onClose, onSaved }: { open:
                 <Field label={viaJump ? 'Private IP (as seen from jump host)' : 'Host / IP'}><input className="input" required value={form.host} onChange={(e) => set('host', e.target.value)} onBlur={splitHost} placeholder={viaJump ? '10.0.0.12' : '160.187.251.46'} /></Field>
                 <Field label="Port"><input className="input" type="number" min={1} max={65535} value={form.port} onChange={(e) => set('port', Number(e.target.value))} /></Field>
               </div>
+              {!viaJump && (
+                <div className="-mt-1 flex items-center gap-2">
+                  <button type="button" onClick={runDetect} disabled={detecting || !form.host || !form.port}
+                    className="flex shrink-0 items-center gap-1 rounded-md bg-white/5 px-2 py-1 text-[11px] text-slate-300 hover:bg-white/10 disabled:opacity-50">
+                    {detecting ? <Loader2 size={11} className="animate-spin" /> : <Radar size={11} />}Detect what's on this port
+                  </button>
+                  {detected && (
+                    <span className={`min-w-0 flex-1 truncate text-[11px] ${MODE_FOR_KIND[detected.kind] ? 'text-emerald-300' : 'text-amber-300'}`} title={detected.detail}>
+                      {detected.detail}
+                      {MODE_FOR_KIND[detected.kind] && MODE_FOR_KIND[detected.kind] !== mode && (
+                        <button type="button" onClick={() => setMode(MODE_FOR_KIND[detected.kind]!)} className="ml-1 underline">use it</button>
+                      )}
+                    </span>
+                  )}
+                </div>
+              )}
               <p className="-mt-1 text-[11px] text-slate-500">
                 {viaJump
                   ? `WinRM port on the private network (normally ${form.https ? '5986' : '5985'}).`
-                  : `Use the port your provider forwards to WinRM (${form.https ? '5986' : '5985'} on the server). A Remote Desktop port will not work.`}
+                  : mode === 'ssh'
+                    ? 'The port your provider forwards to the VM\'s OpenSSH server (22 inside the VM, or whatever sshd listens on). Not the Remote Desktop port.'
+                    : `Use the port your provider forwards to WinRM (${form.https ? '5986' : '5985'} on the server). A Remote Desktop port will not work.`}
               </p>
 
               <AnimatePresence>
@@ -188,6 +238,26 @@ export function ServerForm({ open, editing, servers, onClose, onSaved }: { open:
                 )}
               </AnimatePresence>
 
+              <AnimatePresence>
+                {mode === 'ssh' && (
+                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="space-y-2 overflow-hidden">
+                    {form.fingerprint && (
+                      <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-300">
+                        <ShieldCheck size={13} className="shrink-0" />
+                        <span className="flex-1 truncate font-mono" title={form.fingerprint}>Host key {form.fingerprint}</span>
+                        <button type="button" onClick={() => set('fingerprint', '')} className="text-slate-400 hover:text-white">Clear</button>
+                      </div>
+                    )}
+                    <details className="rounded-lg border border-white/10 bg-black/20 p-3">
+                      <summary className="flex cursor-pointer items-center gap-1.5 text-sm"><KeyRound size={13} />Private key (optional){editing?.hasPrivateKey ? ' · saved' : ''}</summary>
+                      <textarea className="input mt-2 h-24 font-mono text-[10px]" spellCheck={false} value={form.privateKey || ''} onChange={(e) => set('privateKey', e.target.value)}
+                        placeholder={editing?.hasPrivateKey ? 'Leave blank to keep the saved key' : '-----BEGIN OPENSSH PRIVATE KEY-----\n…'} />
+                      <p className="mt-1 text-[11px] text-slate-500">Used instead of, or together with, the password. Stored encrypted with your Keychain. The host key is pinned on first connect.</p>
+                    </details>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               {httpPublic && (
                 <div className="flex gap-2 rounded-lg border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-200">
                   <AlertTriangle size={15} className="mt-0.5 shrink-0" />
@@ -197,7 +267,7 @@ export function ServerForm({ open, editing, servers, onClose, onSaved }: { open:
 
               <Field label="Username"><input className="input" required value={form.username} onChange={(e) => set('username', e.target.value)} /></Field>
               <Field label={editing?.hasPassword ? 'Password (leave blank to keep)' : 'Password'}>
-                <input className="input" type="password" required={!editing?.hasPassword} value={form.password} onChange={(e) => set('password', e.target.value)} />
+                <input className="input" type="password" required={!editing?.hasPassword && !(mode === 'ssh' && (form.privateKey || editing?.hasPrivateKey))} value={form.password} onChange={(e) => set('password', e.target.value)} />
               </Field>
 
               <button type="button" onClick={runTest} disabled={testing || !form.host || !form.username}
@@ -214,8 +284,8 @@ export function ServerForm({ open, editing, servers, onClose, onSaved }: { open:
                         <span className={st.ok ? 'text-slate-300' : 'text-rose-200'}>{st.detail}</span>
                       </motion.li>
                     ))}
-                    {test.ok && form.https && !viaJump && !form.fingerprint && test.fingerprint && (
-                      <li className="pt-1 text-[11px] text-slate-500">This certificate will be pinned when you save.</li>
+                    {test.ok && (mode === 'https' || mode === 'ssh') && !viaJump && !form.fingerprint && test.fingerprint && (
+                      <li className="pt-1 text-[11px] text-slate-500">This {mode === 'ssh' ? 'host key' : 'certificate'} will be pinned when you save.</li>
                     )}
                   </motion.ul>
                 )}

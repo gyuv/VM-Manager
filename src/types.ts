@@ -13,7 +13,11 @@ export interface Server {
   /** Id of the jump host this server is reached through ('' = direct). */
   via: string;
   viaName: string;
+  transport: 'winrm' | 'ssh';
+  hasPrivateKey: boolean;
 }
+
+export type DetectedKind = 'ssh' | 'rdp' | 'winrm-https' | 'https' | 'winrm-http' | 'http' | 'unknown' | 'closed';
 
 export interface ServerInput {
   id?: string;
@@ -26,6 +30,8 @@ export interface ServerInput {
   allowSelfSigned: boolean;
   fingerprint?: string;
   via?: string;
+  transport?: 'winrm' | 'ssh';
+  privateKey?: string;
 }
 
 export interface ConnectionStep {
@@ -127,6 +133,7 @@ export interface WinRemoteOpsApi {
   saveServer(s: ServerInput): Promise<IpcResult<Server>>;
   deleteServer(id: string): Promise<IpcResult<boolean>>;
   testConnection(s: ServerInput): Promise<IpcResult<ConnectionTest>>;
+  detectProtocol(s: ServerInput): Promise<IpcResult<{ kind: DetectedKind; detail: string }>>;
   ping(id: string): Promise<IpcResult<PingResult>>;
   telemetry(id: string): Promise<IpcResult<Telemetry>>;
   processes(id: string): Promise<IpcResult<ProcessInfo[]>>;

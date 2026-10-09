@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { app, BrowserWindow, Menu, ipcMain, safeStorage, shell } = require('electron');
 const Store = require('electron-store');
-const { runPowerShell: runRaw, parseJson, tcpPing, testConnection, testViaJump, wrapForJump, SCRIPTS } = require('./remote');
+const { runPowerShell: runRaw, parseJson, tcpPing, testConnection, testViaJump, wrapForJump, detectProtocol, SCRIPTS } = require('./remote');
 const { Updater } = require('./updater');
 
 const store = new Store({ name: 'servers', defaults: { servers: [] } });
@@ -24,9 +24,9 @@ function decrypt(stored) {
 }
 
 // Accepts "host", "host:port", "[ipv6]:port", or a URL like http://host:port/wsman.
-function splitHostPort(rawHost, rawPort, useHttps) {
+function splitHostPort(rawHost, rawPort, useHttps, transport) {
   let host = String(rawHost || '').trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '');
-  let port = Number(rawPort) || (useHttps ? 5986 : 5985);
+  let port = Number(rawPort) || (transport === 'ssh' ? 22 : useHttps ? 5986 : 5985);
   let m;
   if ((m = host.match(/^\[([^\]]+)\](?::(\d+))?$/))) {
     host = m[1];
@@ -50,7 +50,9 @@ const publicView = (s) => ({
   https: !!s.https,
   allowSelfSigned: !!s.allowSelfSigned,
   fingerprint: s.fingerprint || '',
-  publicHttp: !s.via && !s.https && isPublicAddress(s.host),
+  transport: s.transport === 'ssh' ? 'ssh' : 'winrm',
+  hasPrivateKey: !!s.privateKey,
+  publicHttp: !s.via && s.transport !== 'ssh' && !s.https && isPublicAddress(s.host),
   via: s.via || '',
   viaName: s.via ? (getRaw().find((x) => x.id === s.via) || {}).name || 'missing jump host' : '',
 });
@@ -67,7 +69,9 @@ function isPublicAddress(host) {
 function pinFingerprint(id, fingerprint) {
   const servers = getRaw();
   const s = servers.find((x) => x.id === id);
-  if (!s || !s.https || s.fingerprint || !s.allowSelfSigned) return;
+  if (!s || s.fingerprint) return;
+  // SSH host keys are always pinned on first use; TLS certs only when self-signed trust is on.
+  if (s.transport !== 'ssh' && (!s.https || !s.allowSelfSigned)) return;
   store.set('servers', servers.map((x) => (x.id === id ? { ...x, fingerprint } : x)));
 }
 
@@ -79,7 +83,7 @@ function runPowerShell(server, script, timeoutMs) {
 function getServer(id) {
   const s = getRaw().find((x) => x.id === id);
   if (!s) throw new Error('Unknown server');
-  return { ...s, password: decrypt(s.password) };
+  return { ...s, password: decrypt(s.password), privateKey: s.privateKey ? decrypt(s.privateKey) : '' };
 }
 
 // Runs a script on a server — directly, or through its jump host via Invoke-Command.
@@ -116,7 +120,7 @@ store.set(
   'servers',
   store.get('servers').map((s) => {
     try {
-      return { ...s, ...splitHostPort(s.host, s.port, s.https) };
+      return { ...s, ...splitHostPort(s.host, s.port, s.https, s.transport) };
     } catch {
       return s;
     }
@@ -126,8 +130,9 @@ store.set(
 handle('servers:list', () => getRaw().map(publicView));
 
 handle('servers:save', (_e, input) => {
-  const useHttps = !!input.https;
-  const { host, port } = splitHostPort(input.host, input.port, useHttps);
+  const transport = input.transport === 'ssh' ? 'ssh' : 'winrm';
+  const useHttps = transport === 'winrm' && !!input.https;
+  const { host, port } = splitHostPort(input.host, input.port, useHttps, transport);
   if (!host || !/^[A-Za-z0-9.\-:]+$/.test(host)) throw new Error('Invalid host / IP');
   const servers = getRaw();
   const existing = servers.find((s) => s.id === input.id);
@@ -141,14 +146,16 @@ handle('servers:save', (_e, input) => {
     username: String(input.username || '').trim(),
     // Blank password on edit keeps the stored one.
     password: input.password ? encrypt(input.password) : existing ? existing.password : '',
+    transport,
+    privateKey: transport !== 'ssh' ? '' : input.privateKey ? encrypt(input.privateKey) : existing ? existing.privateKey || '' : '',
     https: useHttps,
     allowSelfSigned: useHttps && !via && !!input.allowSelfSigned,
     // Keep a pin only while the endpoint stays the same; input.fingerprint lets the form pin/clear explicitly.
-    fingerprint: !useHttps || via
+    fingerprint: via || (transport === 'winrm' && !useHttps)
       ? ''
       : typeof input.fingerprint === 'string'
         ? input.fingerprint
-        : existing && existing.host === host && existing.port === port && existing.https
+        : existing && existing.host === host && existing.port === port && (existing.transport || 'winrm') === transport && (transport === 'ssh' || existing.https)
           ? existing.fingerprint || ''
           : '',
   };
@@ -173,9 +180,15 @@ handle('server:ping', (_e, id) => {
 });
 
 // Test unsaved form values; a blank password on an existing server uses the stored one.
+handle('server:detect', (_e, input) => {
+  const { host, port } = splitHostPort(input.host, input.port, !!input.https, input.transport);
+  return detectProtocol(host, port);
+});
+
 handle('server:test', (_e, input) => {
-  const useHttps = !!input.https;
-  const { host, port } = splitHostPort(input.host, input.port, useHttps);
+  const transport = input.transport === 'ssh' ? 'ssh' : 'winrm';
+  const useHttps = transport === 'winrm' && !!input.https;
+  const { host, port } = splitHostPort(input.host, input.port, useHttps, transport);
   const existing = input.id ? getRaw().find((x) => x.id === input.id) : undefined;
   const password = input.password || (existing ? decrypt(existing.password) : '');
   if (input.via) {
@@ -183,6 +196,8 @@ handle('server:test', (_e, input) => {
     return testViaJump(getServer(input.via), { host, port, https: useHttps, username: String(input.username || '').trim(), password });
   }
   return testConnection({
+    transport,
+    privateKey: input.privateKey || (existing && existing.privateKey ? decrypt(existing.privateKey) : ''),
     host,
     port,
     https: useHttps,
