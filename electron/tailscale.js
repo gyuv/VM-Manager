@@ -4,6 +4,7 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 
 const CANDIDATES = [
+  process.env.WINREMOTEOPS_TAILSCALE_CLI, // test hook
   '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
   '/opt/homebrew/bin/tailscale',
   '/usr/local/bin/tailscale',
@@ -11,7 +12,7 @@ const CANDIDATES = [
 ];
 
 function findCli() {
-  return CANDIDATES.find((p) => {
+  return CANDIDATES.filter(Boolean).find((p) => {
     try {
       fs.accessSync(p, fs.constants.X_OK);
       return true;

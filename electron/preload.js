@@ -5,6 +5,13 @@ contextBridge.exposeInMainWorld('api', {
   listServers: () => ipcRenderer.invoke('servers:list'),
   saveServer: (server) => ipcRenderer.invoke('servers:save', server),
   deleteServer: (id) => ipcRenderer.invoke('servers:delete', id),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (s) => ipcRenderer.invoke('settings:set', s),
+  onServersAdded: (cb) => {
+    const l = (_e, names) => cb(names);
+    ipcRenderer.on('servers:added', l);
+    return () => ipcRenderer.removeListener('servers:added', l);
+  },
   tailscaleStatus: () => ipcRenderer.invoke('tailscale:status'),
   tailscaleScript: (opts) => ipcRenderer.invoke('tailscale:script', opts),
   importServers: (payload) => ipcRenderer.invoke('servers:import', payload),
